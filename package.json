@@ -1,0 +1,22 @@
+{
+  "name": "lingshu",
+  "version": "0.1.0",
+  "description": "灵枢：个人知识库 daemon——SQLite 事实库 + bge-m3 向量 + 混合召回，REST/CLI/MCP 三接口，多 Agent 并发安全",
+  "type": "module",
+  "bin": {
+    "lingshu": "bin/lingshu"
+  },
+  "scripts": {
+    "serve": "bun run src/server/main.ts",
+    "mcp": "bun run src/mcp/main.ts",
+    "cli": "bun run src/cli/main.ts",
+    "test": "bun test"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "hono": "^4.13.5"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.0"
+  }
+}

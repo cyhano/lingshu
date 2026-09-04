@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>灵枢 · 知识库</title>
+<script src="https://unpkg.com/vue@3.5.13/dist/vue.global.prod.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/markdown-it@14.1.0/dist/markdown-it.min.js"></script>
+<style>
+  :root { color-scheme: light; }
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-thumb { background: #d4d4d8; border-radius: 3px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  /* markdown 渲染区 */
+  .md-body { line-height: 1.75; }
+  .md-body h1, .md-body h2, .md-body h3 { font-weight: 600; color: #e4e4e7; margin: 1.2em 0 .5em; }
+  .md-body h1 { font-size: 1.5rem; border-bottom: 1px solid #e4e4e7; padding-bottom: .3em; }
+  .md-body h2 { font-size: 1.25rem; border-bottom: 1px solid #e4e4e7; padding-bottom: .25em; }
+  .md-body h3 { font-size: 1.05rem; }
+  .md-body p { margin: .6em 0; color: #d4d4d8; }
+  .md-body a { color: #7dd3fc; text-decoration: none; }
+  .md-body a:hover { text-decoration: underline; }
+  .md-body code { background: #e4e4e7; color: #b45309; padding: .15em .4em; border-radius: 4px; font-size: .875em; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  .md-body pre { background: #fafafa; border: 1px solid #e4e4e7; border-radius: 8px; padding: 1em; overflow-x: auto; margin: .8em 0; }
+  .md-body pre code { background: none; color: #d4d4d8; padding: 0; }
+  .md-body blockquote { border-left: 3px solid #d4d4d8; padding-left: 1em; margin: .8em 0; color: #71717a; }
+  .md-body ul, .md-body ol { padding-left: 1.5em; color: #d4d4d8; margin: .5em 0; }
+  .md-body li { margin: .25em 0; }
+  .md-body table { border-collapse: collapse; margin: .8em 0; width: 100%; font-size: .9em; }
+  .md-body th, .md-body td { border: 1px solid #d4d4d8; padding: .4em .8em; text-align: left; }
+  .md-body th { background: #e4e4e7; color: #e4e4e7; }
+  .md-body hr { border: none; border-top: 1px solid #e4e4e7; margin: 1.5em 0; }
+  .md-body img { max-width: 100%; border-radius: 8px; }
+  .fade-enter-active { transition: opacity .2s; }
+  .fade-enter-from { opacity: 0; }
+</style>
+</head>
+<body class="bg-zinc-50 text-zinc-800 h-screen overflow-hidden">
+<div id="app" class="h-full flex flex-col"></div>
+
+<template id="tpl">
+<div class="h-full flex flex-col">
+  <!-- 顶栏 -->
+  <header class="h-12 shrink-0 bg-zinc-100 border-b border-zinc-200 flex items-center gap-3 px-4">
+    <div class="flex items-center gap-2">
+      <span class="text-lg">🜲</span>
+      <span class="font-semibold text-zinc-900 tracking-wide">灵枢</span>
+    </div>
+    <div class="flex-1 flex items-center gap-2 max-w-2xl mx-auto">
+      <div class="flex bg-zinc-200 rounded-lg p-0.5 text-xs">
+        <button @click="searchMode='recall'" :class="searchMode==='recall' ? 'bg-zinc-300 text-zinc-900' : 'text-zinc-600'" class="px-3 py-1 rounded-md">混合召回</button>
+        <button @click="searchMode='fts'" :class="searchMode==='fts' ? 'bg-zinc-300 text-zinc-900' : 'text-zinc-600'" class="px-3 py-1 rounded-md">关键词</button>
+      </div>
+      <input v-model="searchInput" @keydown.enter="doSearch" :placeholder="searchMode==='recall' ? '自然语言问题，回车搜索…' : '精确关键词，回车搜索…'"
+        class="flex-1 bg-zinc-200 rounded-lg px-3 py-1.5 text-sm outline-none border border-transparent focus:border-zinc-300 placeholder-zinc-600">
+      <button v-if="searchResults" @click="clearSearch" class="text-zinc-600 hover:text-zinc-700 text-sm">✕</button>
+    </div>
+    <div class="flex items-center gap-3 text-xs text-zinc-600">
+      <span>{{ status.notes ?? '—' }} 篇</span>
+      <button @click="startNew" class="bg-blue-600 hover:bg-blue-500 text-zinc-50 px-3 py-1.5 rounded-lg font-medium">＋ 新建</button>
+    </div>
+  </header>
+
+  <div class="flex-1 flex min-h-0">
+    <!-- 左栏：标签云 -->
+    <aside class="w-52 shrink-0 bg-white border-r border-zinc-200 flex flex-col min-h-0">
+      <div class="flex-1 overflow-y-auto p-3 min-h-0">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-xs font-medium text-zinc-600 uppercase tracking-wider">标签</span>
+          <button v-if="activeTag" @click="selectTag(activeTag)" class="text-xs text-zinc-600 hover:text-zinc-700">重置</button>
+        </div>
+        <div class="flex flex-wrap gap-1.5">
+          <button v-for="t in tags" :key="t.tag" @click="selectTag(t.tag)"
+            :class="[tagSize(t.count), activeTag===t.tag ? 'bg-blue-600 text-white' : 'bg-zinc-200 text-zinc-700 hover:bg-zinc-300']"
+            class="rounded-full px-2.5 py-0.5 transition-colors">
+            {{ t.tag }}<span class="opacity-50 ml-1">{{ t.count }}</span>
+          </button>
+        </div>
+      </div>
+      <div class="shrink-0 px-3 py-2.5 border-t border-zinc-200">
+        <button @click="showTrash=!showTrash; searchResults=null; searchInput=''; loadNotes(); note=null; selectedId=null"
+          :class="showTrash ? 'text-orange-600' : 'text-zinc-600 hover:text-zinc-700'"
+          class="text-xs flex items-center gap-1.5">
+          🗑 回收站 <span v-if="trashCount" class="bg-zinc-300 rounded-full px-1.5 py-px text-[10px]">{{ trashCount }}</span>
+        </button>
+      </div>
+    </aside>
+
+    <!-- 中栏：列表 -->
+    <main class="w-80 shrink-0 border-r border-zinc-200 overflow-y-auto">
+      <div v-if="loadingList" class="p-4 text-sm text-zinc-600 animate-pulse">加载中…</div>
+      <div v-else-if="displayList.length === 0" class="p-4 text-sm text-zinc-600">{{ searchResults ? '无搜索结果' : '无笔记' }}</div>
+      <div v-else>
+        <div v-if="searchResults" class="px-3 pt-2 pb-1 text-xs text-zinc-600 border-b border-zinc-200">
+          搜索结果 {{ displayList.length }} 条
+        </div>
+        <button v-for="n in displayList" :key="n.id" @click="openNote(n.id)"
+          :class="selectedId===n.id ? 'bg-zinc-200/80 border-l-2 border-blue-500' : 'border-l-2 border-transparent hover:bg-zinc-100'"
+          class="w-full text-left px-3 py-2.5 block transition-colors">
+          <div class="flex items-center gap-2">
+            <span class="text-sm text-zinc-800 truncate flex-1" :class="{'text-zinc-600 line-through': showTrash}">{{ titleOf(n.title) }}</span>
+            <span v-if="n.vec_score !== null && n.vec_score !== undefined" class="text-[10px] text-zinc-600 shrink-0">{{ n.vec_score.toFixed(2) }}</span>
+          </div>
+          <div v-if="n.snippet" class="text-xs text-zinc-500 mt-1 line-clamp-2 leading-relaxed">{{ n.snippet }}</div>
+          <div v-if="n.updated_at" class="text-[10px] text-zinc-500 mt-1">{{ fmtTime(n.updated_at) }}</div>
+        </button>
+      </div>
+    </main>
+
+    <!-- 右栏：阅读/编辑/版本/事件流 -->
+    <section class="flex-1 min-w-0 flex flex-col">
+      <!-- 阅读态 -->
+      <template v-if="note && view==='read'">
+        <div class="h-11 shrink-0 border-b border-zinc-200 flex items-center gap-2 px-4">
+          <div class="flex gap-1 text-xs">
+            <button @click="tab='read'" :class="tab==='read' ? 'bg-zinc-200 text-zinc-900' : 'text-zinc-600 hover:text-zinc-700'" class="px-3 py-1 rounded-md">阅读</button>
+            <button @click="tab='versions'" :class="tab==='versions' ? 'bg-zinc-200 text-zinc-900' : 'text-zinc-600 hover:text-zinc-700'" class="px-3 py-1 rounded-md">版本 ({{ versions.length || '' }})</button>
+            <button @click="tab='changes'" :class="tab==='changes' ? 'bg-zinc-200 text-zinc-900' : 'text-zinc-600 hover:text-zinc-700'" class="px-3 py-1 rounded-md">事件流</button>
+          </div>
+          <div class="flex-1"></div>
+          <div class="flex items-center gap-2 text-xs">
+            <span class="px-1.5 py-0.5 rounded" :class="actorClass(note.updated_by)">{{ note.updated_by }}</span>
+            <span class="text-zinc-600">v{{ note.version }}</span>
+            <span class="text-zinc-600">{{ fmtTime(note.updated_at) }}</span>
+            <button v-if="!showTrash" @click="startEdit" class="text-blue-600 hover:text-blue-300 px-2 py-1 rounded hover:bg-zinc-200">编辑</button>
+            <button v-if="showTrash" @click="restoreNote(note.id)" class="text-green-600 hover:text-green-300 px-2 py-1 rounded hover:bg-zinc-200">恢复</button>
+            <button v-if="!showTrash" @click="deleteNote" class="text-red-600/80 hover:text-red-600 px-2 py-1 rounded hover:bg-zinc-200">删除</button>
+          </div>
+        </div>
+
+        <!-- 阅读内容 -->
+        <div v-if="tab==='read'" class="flex-1 overflow-y-auto px-8 py-6">
+          <h1 class="text-xl font-semibold text-zinc-900 mb-1">{{ titleOf(note.title) }}</h1>
+          <div class="flex flex-wrap gap-1.5 mb-4">
+            <span v-for="t in note.tags" :key="t" @click="selectTag(t)"
+              class="bg-zinc-200 hover:bg-zinc-300 text-zinc-600 text-xs rounded-full px-2.5 py-0.5 cursor-pointer">#{{ t }}</span>
+          </div>
+          <div class="md-body max-w-3xl" v-html="mdRender(note.content_md)"></div>
+        </div>
+
+        <!-- 版本历史 -->
+        <div v-else-if="tab==='versions'" class="flex-1 overflow-y-auto px-8 py-6">
+          <div v-if="versions.length === 0" class="text-sm text-zinc-600">无历史版本（仅修改过的笔记有快照）</div>
+          <div v-for="v in versions" :key="v.version" class="border border-zinc-200 rounded-lg p-3 mb-2 flex items-center gap-3 max-w-2xl">
+            <span class="font-mono text-zinc-600">v{{ v.version }}</span>
+            <span class="px-1.5 py-0.5 rounded text-xs" :class="actorClass(v.actor)">{{ v.actor }}</span>
+            <span class="text-xs text-zinc-600">{{ fmtTime(v.ts) }}</span>
+            <span class="flex-1 truncate text-xs text-zinc-600">{{ titleOf(v.title) }}</span>
+            <button @click="previewVersion(v.version)" class="text-xs text-zinc-600 hover:text-zinc-800 px-2 py-1 rounded hover:bg-zinc-200">查看</button>
+            <button @click="rollbackTo(v.version)" class="text-xs text-orange-600 hover:text-orange-300 px-2 py-1 rounded hover:bg-zinc-200">回滚</button>
+          </div>
+          <div v-if="versionPreview" class="mt-6 max-w-3xl">
+            <div class="text-sm text-zinc-600 mb-2">v{{ versionPreview.version }} 预览：</div>
+            <div class="md-body border border-zinc-200 rounded-lg p-4" v-html="mdRender(versionPreview.content_md)"></div>
+          </div>
+        </div>
+
+        <!-- 事件流 -->
+        <div v-else class="flex-1 overflow-y-auto px-8 py-6">
+          <div v-for="c in changes" :key="c.id" class="flex items-center gap-3 py-1.5 border-b border-zinc-200 text-sm max-w-2xl">
+            <span class="text-xs text-zinc-600 w-32 shrink-0 font-mono">{{ fmtTime(c.ts) }}</span>
+            <span class="px-1.5 py-0.5 rounded text-xs shrink-0" :class="actorClass(c.actor)">{{ c.actor }}</span>
+            <span class="text-xs shrink-0" :class="{ 'text-red-600': c.op==='delete', 'text-green-600': c.op==='create', 'text-blue-600': c.op==='restore', 'text-zinc-600': c.op==='update' }">{{ c.op }}</span>
+            <span class="truncate text-zinc-600 flex-1">{{ titleOf(c.title) }}</span>
+          </div>
+        </div>
+      </template>
+
+      <!-- 编辑态 -->
+      <template v-else-if="view==='edit'">
+        <div class="h-11 shrink-0 border-b border-zinc-200 flex items-center gap-2 px-4">
+          <span class="text-sm text-zinc-600">{{ editForm.id ? '编辑' : '新建笔记' }}<span v-if="editForm.id" class="text-zinc-600 ml-1">（基于 v{{ editForm.version }}）</span></span>
+          <div class="flex-1"></div>
+          <button @click="view='read'; showNew=false" class="text-xs text-zinc-600 hover:text-zinc-700 px-3 py-1.5 rounded hover:bg-zinc-200">取消</button>
+          <button @click="saveEdit" :disabled="saving" class="text-xs bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-4 py-1.5 rounded-lg font-medium">{{ saving ? '保存中…' : '保存' }}</button>
+        </div>
+        <div class="flex-1 overflow-y-auto px-8 py-6 flex flex-col gap-3">
+          <input v-model="editForm.title" placeholder="标题（建议带目录前缀，如 03-项目要点/xxx.md）"
+            class="bg-zinc-100 border border-zinc-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-zinc-300 w-full max-w-2xl placeholder-zinc-600">
+          <textarea v-model="editForm.content_md" placeholder="markdown 正文…（frontmatter 的 tags 数组和正文 #tag 都会被自动提取）"
+            class="flex-1 bg-zinc-100 border border-zinc-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-zinc-300 w-full max-w-2xl font-mono leading-relaxed placeholder-zinc-600 resize-none"></textarea>
+        </div>
+      </template>
+
+      <!-- 空态 -->
+      <div v-else class="flex-1 flex items-center justify-center text-zinc-600 text-sm">
+        <div class="text-center">
+          <div class="text-4xl mb-3">🜲</div>
+          <div>从左侧选择一篇笔记，或搜索</div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- toast -->
+  <transition name="fade">
+    <div v-if="toast.show" :class="toast.type==='ok' ? 'bg-zinc-200 border-zinc-300' : 'bg-red-50 border-red-300'"
+      class="fixed bottom-6 left-1/2 -translate-x-1/2 border rounded-lg px-4 py-2 text-sm text-zinc-900 shadow-xl z-50">
+      {{ toast.text }}
+    </div>
+  </transition>
+</div>
+</template>
+
+<script>
+const { createApp, ref, reactive, computed, onMounted, watch, nextTick } = Vue
+
+// actor 徽章配色
+const ACTOR_STYLE = {
+  zcode:  'bg-blue-500/10 text-blue-600',
+  dsh:    'bg-green-500/10 text-green-600',
+  cc:     'bg-orange-500/10 text-orange-600',
+  human:  'bg-zinc-500/10 text-zinc-600',
+  import: 'bg-purple-500/10 text-purple-600',
+}
+
+async function api(method, path, body) {
+  const resp = await fetch(path, {
+    method,
+    headers: { 'Content-Type': 'application/json', 'x-actor': 'human' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+  const json = await resp.json().catch(() => ({}))
+  if (!resp.ok) throw Object.assign(new Error(json.message || json.error || resp.status), { data: json })
+  return json
+}
+
+const app = createApp({
+  setup() {
+    const md = window.markdownit({ html: false, linkify: true, breaks: false })
+    const mdRender = (src) => { try { return md.render(src || '') } catch { return '<pre>' + src + '</pre>' } }
+
+    // ── 状态 ──
+    const tags = ref([])
+    const status = ref({})
+    const trashCount = ref(0)
+    const notes = ref([])
+    const loadingList = ref(false)
+    const selectedId = ref(null)
+    const note = ref(null)           // 当前笔记（含 tags）
+    const view = ref('read')          // read | edit
+    const editForm = reactive({ title: '', content_md: '', version: null, id: null })
+    const saving = ref(false)
+    const toast = reactive({ show: false, text: '', type: 'ok' })
+    const tab = ref('read')           // 右栏 tab：read | versions | changes
+    const versions = ref([])
+    const versionPreview = ref(null)  // {version, content_md}
+    const changes = ref([])
+    // 搜索
+    const searchMode = ref('recall')  // recall | fts
+    const searchInput = ref('')
+    const searching = ref(false)
+    const searchResults = ref(null)   // null = 未搜索；[] = 无结果
+    const activeTag = ref(null)
+    const showTrash = ref(false)
+    const showNew = ref(false)
+
+    // ── 数据加载 ──
+    const loadTags = () => api('GET', '/tags').then((r) => (tags.value = r))
+    const loadStatus = () => api('GET', '/status').then((r) => (status.value = r))
+    const loadTrash = () => api('GET', '/trash/count').then((r) => (trashCount.value = r.count))
+
+    async function loadNotes() {
+      loadingList.value = true
+      try {
+        const params = new URLSearchParams({ limit: 200 })
+        if (activeTag.value) params.set('tag', activeTag.value)
+        if (showTrash.value) params.set('deleted', '1')
+        notes.value = await api('GET', '/notes?' + params)
+      } finally { loadingList.value = false }
+    }
+
+    async function openNote(id) {
+      selectedId.value = id
+      tab.value = 'read'
+      view.value = 'read'
+      note.value = await api('GET', '/notes/' + encodeURIComponent(id) + (showTrash.value ? '?deleted=1' : ''))
+    }
+
+    async function openVersions() {
+      tab.value = 'versions'
+      versionPreview.value = null
+      versions.value = await api('GET', `/notes/${encodeURIComponent(selectedId.value)}/versions`)
+    }
+
+    async function previewVersion(v) {
+      versionPreview.value = await api('GET', `/notes/${encodeURIComponent(selectedId.value)}/versions/${v}`)
+    }
+
+    async function rollbackTo(v) {
+      if (!confirm(`回滚到 v${v}？当前内容会先存为历史版本。`)) return
+      try {
+        await api('POST', `/notes/${encodeURIComponent(selectedId.value)}/rollback`, { version: v })
+        showToast(`已回滚到 v${v}`)
+        await openNote(selectedId.value)
+        await openVersions()
+      } catch (e) { showToast('回滚失败: ' + e.message, 'err') }
+    }
+
+    const loadChanges = () => api('GET', '/changes?since=0').then((r) => {
+      changes.value = r.slice(-100).reverse()
+    })
+
+    // ── 搜索 ──
+    async function doSearch() {
+      const q = searchInput.value.trim()
+      if (!q) { searchResults.value = null; return }
+      searching.value = true
+      try {
+        if (searchMode.value === 'recall') {
+          searchResults.value = await api('POST', '/recall', { query: q, k: 10 })
+        } else {
+          searchResults.value = (await api('GET', '/search?q=' + encodeURIComponent(q) + '&limit=20')).map((n) => ({
+            id: n.id, title: n.title, snippet: '', score: null, vec_score: null, fts_rank: null, tags: [], updated_at: n.updated_at,
+          }))
+        }
+      } finally { searching.value = false }
+    }
+
+    function clearSearch() { searchInput.value = ''; searchResults.value = null }
+
+    // ── 编辑/新建/删除/恢复 ──
+    function startEdit() {
+      view.value = 'edit'
+      editForm.id = note.value.id
+      editForm.title = note.value.title
+      editForm.content_md = note.value.content_md
+      editForm.version = note.value.version
+    }
+
+    function startNew() { showNew.value = true; view.value = 'edit'; editForm.id = null; editForm.title = ''; editForm.content_md = ''; editForm.version = null }
+
+    async function saveEdit() {
+      if (!editForm.title.trim() || !editForm.content_md.trim()) { showToast('标题和正文不能为空', 'err'); return }
+      saving.value = true
+      try {
+        let saved
+        if (editForm.id) {
+          saved = await api('PUT', '/notes/' + encodeURIComponent(editForm.id), { title: editForm.title, content_md: editForm.content_md })
+        } else {
+          saved = await api('POST', '/notes', { title: editForm.title, content_md: editForm.content_md })
+        }
+        showToast('已保存 v' + saved.version)
+        showNew.value = false
+        view.value = 'read'
+        await loadNotes(); await loadTags(); await loadStatus()
+        await openNote(saved.id)
+      } catch (e) {
+        showToast('保存失败: ' + (e.message || '冲突'), 'err')
+      } finally { saving.value = false }
+    }
+
+    async function deleteNote() {
+      if (!confirm('软删除该笔记？（可从回收站恢复）')) return
+      try {
+        await api('DELETE', '/notes/' + encodeURIComponent(selectedId.value))
+        showToast('已移入回收站')
+        note.value = null; selectedId.value = null
+        await Promise.all([loadNotes(), loadTrash(), loadStatus()])
+      } catch (e) { showToast('删除失败: ' + e.message, 'err') }
+    }
+
+    async function restoreNote(id) {
+      try {
+        await api('POST', '/notes/' + encodeURIComponent(id) + '/restore')
+        showToast('已恢复')
+        await Promise.all([loadNotes(), loadTrash()])
+      } catch (e) { showToast('恢复失败: ' + e.message, 'err') }
+    }
+
+    // ── 视图辅助 ──
+    const actorClass = (a) => ACTOR_STYLE[a] || 'bg-zinc-500/10 text-zinc-600'
+    const fmtTime = (iso) => (iso || '').replace('T', ' ').slice(0, 16)
+    const tagSize = (count) => {
+      const max = tags.value[0]?.count || 1
+      const ratio = count / max
+      if (ratio > 0.7) return 'text-sm'
+      if (ratio > 0.3) return 'text-xs'
+      return 'text-[11px]'
+    }
+    const titleOf = (t) => String(t || '').replace(/\.md$/, '')
+    let toastTimer
+    function showToast(text, type = 'ok') {
+      toast.text = text; toast.type = type; toast.show = true
+      clearTimeout(toastTimer)
+      toastTimer = setTimeout(() => (toast.show = false), 2200)
+    }
+
+    // 中栏列表数据源：搜索结果优先
+    const displayList = computed(() => {
+      if (searchResults.value) return searchResults.value
+      return notes.value.map((n) => ({ id: n.id, title: n.title, snippet: '', score: null, updated_at: n.updated_at, tags: [] }))
+    })
+
+    function selectTag(tag) {
+      activeTag.value = activeTag.value === tag ? null : tag
+      showTrash.value = false
+      searchResults.value = null; searchInput.value = ''
+      loadNotes()
+    }
+
+    watch(tab, (t) => { if (t === 'versions' && selectedId.value) openVersions(); if (t === 'changes') loadChanges() })
+
+    onMounted(async () => {
+      await Promise.all([loadStatus(), loadTags(), loadTrash(), loadNotes(), loadChanges()])
+    })
+
+    return {
+      tags, status, trashCount, notes, loadingList, selectedId, note, view, editForm, saving, toast, tab,
+      versions, versionPreview, changes, searchMode, searchInput, searching, searchResults, activeTag, showTrash, showNew,
+      mdRender, loadNotes, openNote, openVersions, previewVersion, rollbackTo, doSearch, clearSearch,
+      startEdit, startNew, saveEdit, deleteNote, restoreNote,
+      actorClass, fmtTime, tagSize, titleOf, displayList, selectTag,
+    }
+  },
+})
+
+// 先注入模板再挂载（Vue 运行时编译需要在 mount 前拿到模板内容）
+document.querySelector('#app').innerHTML = document.querySelector('#tpl').innerHTML
+app.mount('#app')
+</script>
+
+<!-- ── 模板 ── -->
+</body>
+</html>

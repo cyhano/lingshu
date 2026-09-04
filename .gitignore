@@ -1,0 +1,19 @@
+# 依赖
+node_modules/
+
+# 数据与备份（个人知识库内容，绝不入库；库文件含私人笔记和凭据）
+*.db
+*.db-wal
+*.db-shm
+backups/
+~/.lingshu/
+
+# 本地环境
+.env
+.env.*
+
+# 编辑器
+.DS_Store
+*.swp
+.idea/
+.vscode/

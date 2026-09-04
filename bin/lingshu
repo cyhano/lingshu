@@ -1,0 +1,13 @@
+#!/bin/sh
+# lingshu — 统一入口：serve 启动 daemon，其余转发给 CLI
+case "$1" in
+  serve)
+    exec bun run /Users/tal/code/lingshu/src/server/main.ts
+    ;;
+  mcp)
+    exec bun run /Users/tal/code/lingshu/src/mcp/main.ts
+    ;;
+  *)
+    exec bun run /Users/tal/code/lingshu/src/cli/main.ts "$@"
+    ;;
+esac
