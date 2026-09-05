@@ -1,0 +1,28 @@
+# CI：类型检查 + 全量测试
+# bun 官方 action 缓存依赖；测试用 FakeEmbedder，零 API 成本零网络依赖
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: 安装依赖
+        run: bun install --frozen-lockfile
+
+      - name: 类型检查
+        run: bunx tsc --noEmit
+
+      - name: 运行测试
+        run: bun test

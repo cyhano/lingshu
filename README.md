@@ -8,13 +8,13 @@
 
 ```
 多 Agent（ZCode / DSH / Claude Code / 人工 CLI）
-        │  MCP（stdio） / REST（hook、脚本） / CLI
+        │  MCP（stdio） / REST（hook、脚本） / CLI / WebUI
         ▼
 灵枢 daemon（bun 常驻进程，127.0.0.1:7430）
   ├─ CRUD + 版本快照 + 事件流（多 Agent 感知）
   ├─ 混合召回：bge-m3 语义 + FTS5 trigram，RRF 融合
-  ├─ 脏队列自动向量化（30s 一批）
-  └─ 每日 03:00 备份（VACUUM INTO，7 份轮换）
+  ├─ 脏队列自动向量化（30s 一批，可配）
+  └─ 每日定时备份（VACUUM INTO，份数轮换，可配）
         ▼
 SQLite 单文件（~/.lingshu/lingshu.db，WAL 模式）
 ```
@@ -29,10 +29,52 @@ SQLite 单文件（~/.lingshu/lingshu.db，WAL 模式）
 ## 快速开始
 
 ```bash
-cd ~/code/lingshu
+git clone https://github.com/cyhano/lingshu.git
+cd lingshu
+bun install                                   # 安装依赖（需要 bun ≥ 1.2）
 SILICONFLOW_API_KEY=你的key bun run src/server/main.ts   # 启动 daemon
-bun run src/cli/main.ts status                          # 验证
+bun run src/cli/main.ts status                # 验证
 ```
+
+启动后浏览器打开 **http://127.0.0.1:7430/** 即是 WebUI。
+
+[硅基流动 API key](https://siliconflow.cn/) 免费注册可得（bge-m3 embedding 免费额度足够个人使用）。
+
+## WebUI
+
+daemon 内置 Web 页面（`web/index.html`，Vue 3 + markdown-it，CDN 引入零构建），浏览器打开 `http://127.0.0.1:7430/` 即用：
+
+- **三栏布局**：左栏标签云（按计数排序、点击筛选、回收站入口）/ 中栏笔记列表 / 右栏阅读与编辑
+- **混合搜索**：顶栏一个框，支持「召回」（语义+关键词融合，展示相似度）与「搜索」（FTS 关键词）双模式
+- **阅读**：markdown 渲染、frontmatter 徽章、版本历史下拉（可预览任意历史版本并回滚）
+- **编辑**：原始 markdown 编辑（textarea 整体重写）、新建笔记
+- **回收站**：软删笔记列表、恢复
+- **事件流**：查看各 Agent（zcode/dsh/cc/human）最近的变更记录
+
+WebUI 与 MCP/CLI/REST 走同一套 API，操作全部落 updated_by 与事件流，和 Agent 写入互相可见。
+
+## 配置文件（config.toml）
+
+配置可选，不创建则全用默认值。复制示例开始：
+
+```bash
+cp config.example.toml ~/.lingshu/config.toml
+```
+
+```toml
+[server]
+port = 7430                      # 监听端口
+
+[backup]
+dir = "~/.lingshu/backups"       # 备份目录（支持 ~）
+time = "03:00"                   # 每日备份时刻（本地时间 HH:MM）
+keep = 7                         # 保留份数（超出轮换最旧）
+
+[scheduler]
+embed_interval_sec = 30          # 增量向量化周期（秒）
+```
+
+优先级：**环境变量 > config.toml > 默认值**。环境变量：`LINGSHU_CONFIG`（配置文件路径）、`LINGSHU_DB`、`LINGSHU_BACKUP_DIR`、`LINGSHU_PORT`、`SILICONFLOW_API_KEY`。
 
 ## CLI
 
@@ -50,7 +92,7 @@ bun run src/cli/main.ts                     # 帮助
   backup                                    # 立即备份
 ```
 
-环境变量：`LINGSHU_ACTOR`（身份标识，写入 updated_by/changes）、`SILICONFLOW_API_KEY`（向量化，必需）、`LINGSHU_PORT`（默认 7430）。
+环境变量：`LINGSHU_ACTOR`（身份标识，写入 updated_by/changes）。
 
 ## REST
 
@@ -63,9 +105,11 @@ POST /notes/:id/restore                       恢复
 POST /notes/:id/rollback {version}            回滚到历史版本
 GET  /notes/:id/versions                      版本历史
 GET  /notes?tag=&limit=                       列表
+GET  /tags                                    标签云（计数）
+GET  /trash/count                             回收站计数
 GET  /search?q=                               FTS 搜索
 POST /recall {query, k}                       混合召回
-GET  /changes?since=                          事件流
+GET  /changes?since=&limit=                   事件流
 POST /embed/drain                             全量向量化
 POST /backup                                  立即备份
 GET  /status                                  状态
@@ -82,45 +126,68 @@ GET  /status                                  状态
   "mcpServers": {
     "lingshu": {
       "command": "bun",
-      "args": ["run", "/Users/tal/code/lingshu/src/mcp/main.ts"],
-      "env": { "LINGSHU_ACTOR": "zcode" }   // dsh 用 "dsh"，claude code 用 "cc"
+      "args": ["run", "/path/to/lingshu/src/mcp/main.ts"],
+      "env": { "LINGSHU_ACTOR": "zcode" }
     }
   }
 }
 ```
+
+每个 Agent 用不同的 `LINGSHU_ACTOR`（如 `zcode` / `dsh` / `cc`），身份自动落到 `updated_by` 和事件流。
 
 工具集：
 | 工具 | 用途 |
 |---|---|
 | `lingshu_recall` | 语义+关键词混合召回（session 开始/需要背景知识时先调这个） |
 | `lingshu_read` | 按 id 或标题读全文 |
-| `lingshu_write` | 写入（无 id 创建、有 id 整体重写） |
+| `lingshu_write` | 写入（无 id 创建、有 id 整体重写；带 version 启用乐观锁） |
 | `lingshu_search` | 关键词精确搜索（项目名、报错码） |
 | `lingshu_changes` | 拉事件流，感知其他 Agent 的变更 |
 
 ## 自动召唤（hook）
 
-替代 obsidian-recall，各 Agent 的 UserPromptSubmit hook 里调：
+各 Agent 的 UserPromptSubmit hook 里调，实现「提问即召回」：
 
 ```bash
-curl -s http://127.0.0.1:7430/recall -H 'Content-Type: application/json' \
+curl -s http://127.0.0.1:7430/reccall -H 'Content-Type: application/json' \
   -d '{"query":"<用户prompt>","k":3}'
 ```
+
+（示例路径以实际为准：`/recall`）
+
+## pm2 常驻
+
+```bash
+pm2 start ecosystem.config.cjs    # key 从环境变量读
+pm2 save
+```
+
+## 测试
+
+```bash
+bun test        # 70 用例：CRUD/并发/搜索/切块/边界，FakeEmbedder 零 API 成本
+bunx tsc --noEmit  # 类型检查
+```
+
+CI（GitHub Actions）在 push/PR 时自动跑这两项。
 
 ## 数据文件
 
 - 库：`~/.lingshu/lingshu.db`（+ WAL/SHM）
-- 备份：`~/.lingshu/backups/`（每日 03:00，7 份轮换）
+- 备份：`~/.lingshu/backups/`（默认每日 03:00、保留 7 份，config.toml 可改）
 
 ## 目录结构
 
 ```
-src/
-├── server/    # Hono REST + daemon 入口 + config
-├── mcp/       # MCP stdio server（薄壳，转发 HTTP）
-├── cli/       # 命令行客户端 + vault 导入
-├── db/        # schema/migrate + repo（全部 SQL）
-├── embed/     # embedder（硅基流动 bge-m3）+ 脏队列 pipeline
-├── recall/    # 混合召回（向量 + FTS + RRF）
-└── scheduler/ # 30s 增量向量化 + 每日备份
+├── config.example.toml   # 配置示例（备份目录/时间/份数、向量化周期等）
+├── web/index.html        # 内置 WebUI（Vue3 单文件，零构建）
+├── src/
+│   ├── server/           # Hono REST + daemon 入口 + config 加载
+│   ├── mcp/              # MCP stdio server（薄壳，转发 HTTP）
+│   ├── cli/              # 命令行客户端 + vault 导入
+│   ├── db/               # schema/migrate + repo（全部 SQL + 切块）
+│   ├── embed/            # embedder（硅基流动 bge-m3）+ 脏队列 pipeline
+│   ├── recall/           # 混合召回（向量 + FTS + RRF）
+│   └── scheduler/        # 定时向量化 + 每日备份轮换
+└── test/                 # 70 用例（FakeEmbedder 隔离环境）
 ```
