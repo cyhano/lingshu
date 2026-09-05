@@ -139,7 +139,11 @@ export function createApp(deps: AppDeps): Hono {
   // ── WebUI（静态单页，挂在根路径；API 路由优先匹配）──
   // 项目根目录绝对路径：从本文件（src/server/app.ts）上溯两级
   const webDir = new URL('../../', import.meta.url).pathname + 'web/'
-  app.get('/', async (c) => c.html(await Bun.file(webDir + 'index.html').text()))
+  // no-cache：WebUI 迭代频繁（无构建哈希），让浏览器每次协商缓存，避免移动端拿到旧 JS
+  app.get('/', async (c) => {
+    const html = await Bun.file(webDir + 'index.html').text()
+    return c.html(html, 200, { 'Cache-Control': 'no-cache' })
+  })
   app.use('/*', serveStatic({ root: webDir }))
 
   return app

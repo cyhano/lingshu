@@ -46,6 +46,15 @@ describe('frontmatter 解析（纯函数）', () => {
     // # 后必须紧跟非空格才是 tag；markdown 标题 "# 标题" 不应误判
     expect(extractTags('# 这是一级标题\n\n## 二级')).toEqual([])
   })
+
+  test('纯数字/编号引用不是 tag（issue/MR 编号）', () => {
+    // GitHub issue 引用、MR 编号常以 # 开头，不应误提取
+    const md = '发布了 MR #1245 承接测试，issue #416/#426 已确认，关联 #498。真 tag：#前端'
+    const tags = extractTags(md)
+    expect(tags).toEqual(['前端'])
+    expect(tags).not.toContain('1245')
+    expect(tags).not.toContain('416')
+  })
 })
 
 describe('切块策略', () => {

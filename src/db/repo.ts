@@ -77,14 +77,16 @@ export function extractTags(content: string): string[] {
       }
     }
   }
-  // 2. 正文行内 #tag
+  // 2. 正文行内 #tag；纯数字/数字形态不算（GitHub issue「#416/#426」、MR「#1245」等编号会被误吃）
   let inFence = false
   const body = content.replace(/^---\n[\s\S]*?\n---\n?/, '')
   for (const line of body.split('\n')) {
     if (/^\s*(```|~~~)/.test(line)) { inFence = !inFence; continue }
     if (inFence) continue
-    for (const m of line.matchAll(/(?:^|\s)#([\w\u4e00-\u9fff][\w\u4e00-\u9fff/-]*)/g)) {
-      tags.add(m[1])
+    for (const m of line.matchAll(/(?:^|[\s\u3000:：,，;；()（）\]\）])#([\w\u4e00-\u9fff][\w\u4e00-\u9fff/-]*)/g)) {
+      const tag = m[1]
+      if (/^[\d/-]+$/.test(tag)) continue // 纯数字/编号引用不是 tag
+      tags.add(tag)
     }
   }
   return [...tags]
