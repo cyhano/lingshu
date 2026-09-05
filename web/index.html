@@ -14,23 +14,28 @@
   ::-webkit-scrollbar-thumb { background: #d4d4d8; border-radius: 3px; }
   ::-webkit-scrollbar-track { background: transparent; }
   /* markdown 渲染区 */
-  .md-body { line-height: 1.75; }
-  .md-body h1, .md-body h2, .md-body h3 { font-weight: 600; color: #e4e4e7; margin: 1.2em 0 .5em; }
-  .md-body h1 { font-size: 1.5rem; border-bottom: 1px solid #e4e4e7; padding-bottom: .3em; }
-  .md-body h2 { font-size: 1.25rem; border-bottom: 1px solid #e4e4e7; padding-bottom: .25em; }
+  .md-body { line-height: 1.75; font-size: 16px; }
+  @media (max-width: 767px) {
+    .md-body { font-size: 15.5px; }
+    .md-body h1 { font-size: 1.35rem; }
+    .md-body h2 { font-size: 1.15rem; }
+  }
+  .md-body h1, .md-body h2, .md-body h3 { font-weight: 600; color: #18181b; margin: 1.2em 0 .5em; }
+  .md-body h1 { font-size: 1.5rem; border-bottom: 1px solid #d4d4d8; padding-bottom: .3em; }
+  .md-body h2 { font-size: 1.25rem; border-bottom: 1px solid #d4d4d8; padding-bottom: .25em; }
   .md-body h3 { font-size: 1.05rem; }
-  .md-body p { margin: .6em 0; color: #d4d4d8; }
-  .md-body a { color: #7dd3fc; text-decoration: none; }
+  .md-body p { margin: .6em 0; color: #27272a; }
+  .md-body a { color: #2563eb; text-decoration: none; }
   .md-body a:hover { text-decoration: underline; }
   .md-body code { background: #e4e4e7; color: #b45309; padding: .15em .4em; border-radius: 4px; font-size: .875em; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
   .md-body pre { background: #fafafa; border: 1px solid #e4e4e7; border-radius: 8px; padding: 1em; overflow-x: auto; margin: .8em 0; }
-  .md-body pre code { background: none; color: #d4d4d8; padding: 0; }
-  .md-body blockquote { border-left: 3px solid #d4d4d8; padding-left: 1em; margin: .8em 0; color: #71717a; }
-  .md-body ul, .md-body ol { padding-left: 1.5em; color: #d4d4d8; margin: .5em 0; }
+  .md-body pre code { background: none; color: #27272a; padding: 0; }
+  .md-body blockquote { border-left: 3px solid #d4d4d8; padding-left: 1em; margin: .8em 0; color: #52525b; }
+  .md-body ul, .md-body ol { padding-left: 1.5em; color: #27272a; margin: .5em 0; }
   .md-body li { margin: .25em 0; }
   .md-body table { border-collapse: collapse; margin: .8em 0; width: 100%; font-size: .9em; }
   .md-body th, .md-body td { border: 1px solid #d4d4d8; padding: .4em .8em; text-align: left; }
-  .md-body th { background: #e4e4e7; color: #e4e4e7; }
+  .md-body th { background: #f4f4f5; color: #18181b; }
   .md-body hr { border: none; border-top: 1px solid #e4e4e7; margin: 1.5em 0; }
   .md-body img { max-width: 100%; border-radius: 8px; }
   .fade-enter-active { transition: opacity .2s; }
@@ -42,34 +47,43 @@
 
 <template id="tpl">
 <div class="h-full flex flex-col">
-  <!-- 顶栏 -->
-  <header class="h-12 shrink-0 bg-zinc-100 border-b border-zinc-200 flex items-center gap-3 px-4">
-    <div class="flex items-center gap-2">
+  <!-- 顶栏（桌面：单行；移动：返回键 + 搜索收起为图标） -->
+  <header class="shrink-0 bg-zinc-100 border-b border-zinc-200 flex items-center gap-2 sm:gap-3 px-3 sm:px-4 h-12">
+    <!-- 移动端：返回列表（选中笔记时显示） -->
+    <button v-if="isMobile && note" @click="note=null; selectedId=null" class="md:hidden text-zinc-600 hover:text-zinc-800 text-sm px-1 -ml-1">‹ 返回</button>
+    <div class="flex items-center gap-2 shrink-0" :class="isMobile && note ? 'hidden' : ''">
       <span class="text-lg">🜲</span>
-      <span class="font-semibold text-zinc-900 tracking-wide">灵枢</span>
+      <span class="font-semibold text-zinc-900 tracking-wide hidden sm:inline">灵枢</span>
     </div>
-    <div class="flex-1 flex items-center gap-2 max-w-2xl mx-auto">
-      <div class="flex bg-zinc-200 rounded-lg p-0.5 text-xs">
+    <div class="flex-1 flex items-center gap-2 max-w-2xl mx-auto min-w-0" style="min-width:0">
+      <div class="flex bg-zinc-200 rounded-lg p-0.5 text-xs shrink-0 hidden sm:flex">
         <button @click="searchMode='recall'" :class="searchMode==='recall' ? 'bg-zinc-300 text-zinc-900' : 'text-zinc-600'" class="px-3 py-1 rounded-md">混合召回</button>
         <button @click="searchMode='fts'" :class="searchMode==='fts' ? 'bg-zinc-300 text-zinc-900' : 'text-zinc-600'" class="px-3 py-1 rounded-md">关键词</button>
       </div>
+      <!-- 移动端：模式切换移到搜索框右侧图标式切换 -->
+      <button @click="searchMode = searchMode==='recall' ? 'fts' : 'recall'" class="sm:hidden shrink-0 text-[10px] text-zinc-600 bg-zinc-200 rounded-md px-1.5 py-1" :title="searchMode==='recall' ? '当前：混合召回' : '当前：关键词'">{{ searchMode==='recall' ? '语义' : '关键词' }}</button>
       <input v-model="searchInput" @keydown.enter="doSearch" :placeholder="searchMode==='recall' ? '自然语言问题，回车搜索…' : '精确关键词，回车搜索…'"
-        class="flex-1 bg-zinc-200 rounded-lg px-3 py-1.5 text-sm outline-none border border-transparent focus:border-zinc-300 placeholder-zinc-600">
+        style="min-width:0" class="flex-1 min-w-0 bg-zinc-200 rounded-lg px-3 py-1.5 text-sm outline-none border border-transparent focus:border-zinc-300 placeholder-zinc-600">
       <button v-if="searchResults" @click="clearSearch" class="text-zinc-600 hover:text-zinc-700 text-sm">✕</button>
     </div>
-    <div class="flex items-center gap-3 text-xs text-zinc-600">
-      <span>{{ status.notes ?? '—' }} 篇</span>
-      <button @click="startNew" class="bg-blue-600 hover:bg-blue-500 text-zinc-50 px-3 py-1.5 rounded-lg font-medium">＋ 新建</button>
+    <div class="flex items-center gap-3 text-xs text-zinc-600 shrink-0">
+      <span class="hidden sm:inline">{{ status.notes ?? '—' }} 篇</span>
+      <button v-if="!readOnly" @click="startNew" style="background:#2563eb;color:#fff" class="hover:bg-blue-500 py-1.5 rounded-lg font-medium text-sm shrink-0" aria-label="新建笔记"><span class="sm:hidden px-2">＋</span><span class="hidden sm:inline px-3">＋ 新建</span></button>
+      <span v-else class="text-[10px] text-zinc-500 border border-zinc-300 rounded-full px-2 py-0.5">只读</span>
     </div>
   </header>
 
   <div class="flex-1 flex min-h-0">
-    <!-- 左栏：标签云 -->
-    <aside class="w-52 shrink-0 bg-white border-r border-zinc-200 flex flex-col min-h-0">
+    <!-- 左栏：标签云（移动端：抽屉，由 ☰ 开关；桌面：常驻） -->
+    <aside v-show="!isMobile || showTagDrawer"
+      class="shrink-0 bg-white border-r border-zinc-200 flex flex-col min-h-0 w-52 max-md:absolute max-md:inset-y-12 max-md:left-0 max-md:w-64 max-md:z-30 max-md:shadow-xl">
       <div class="flex-1 overflow-y-auto p-3 min-h-0">
         <div class="flex items-center justify-between mb-2">
           <span class="text-xs font-medium text-zinc-600 uppercase tracking-wider">标签</span>
-          <button v-if="activeTag" @click="selectTag(activeTag)" class="text-xs text-zinc-600 hover:text-zinc-700">重置</button>
+          <span class="flex items-center gap-2">
+            <button v-if="activeTag" @click="selectTag(activeTag)" class="text-xs text-zinc-600 hover:text-zinc-700">重置</button>
+            <button v-if="isMobile" @click="showTagDrawer=false" class="text-xs text-zinc-600 hover:text-zinc-800 md:hidden">完成 ✕</button>
+          </span>
         </div>
         <div class="flex flex-wrap gap-1.5">
           <button v-for="t in tags" :key="t.tag" @click="selectTag(t.tag)"
@@ -79,7 +93,7 @@
           </button>
         </div>
       </div>
-      <div class="shrink-0 px-3 py-2.5 border-t border-zinc-200">
+      <div v-if="!readOnly" class="shrink-0 px-3 py-2.5 border-t border-zinc-200">
         <button @click="showTrash=!showTrash; searchResults=null; searchInput=''; loadNotes(); note=null; selectedId=null"
           :class="showTrash ? 'text-orange-600' : 'text-zinc-600 hover:text-zinc-700'"
           class="text-xs flex items-center gap-1.5">
@@ -87,9 +101,21 @@
         </button>
       </div>
     </aside>
+    <!-- 移动端抽屉遮罩 -->
+    <div v-if="isMobile && showTagDrawer" @click="showTagDrawer=false" class="fixed inset-0 top-12 bg-black/20 z-20 md:hidden"></div>
 
-    <!-- 中栏：列表 -->
-    <main class="w-80 shrink-0 border-r border-zinc-200 overflow-y-auto">
+    <!-- 中栏：列表（移动端：选中笔记后隐藏；桌面：常驻 320px） -->
+    <main :class="isMobile ? 'w-full' : 'w-80'"
+      v-show="!isMobile || (!note && view !== 'edit')"
+      class="shrink-0 border-r border-zinc-200 overflow-y-auto">
+      <!-- 移动端：标签筛选行（代替左栏抽屉的常驻入口） -->
+      <div v-if="isMobile" class="md:hidden sticky top-0 bg-zinc-50/95 backdrop-blur border-b border-zinc-200 px-3 py-2 flex items-center gap-2 text-xs">
+        <button @click="showTagDrawer=true" class="flex items-center gap-1 text-zinc-600 hover:text-zinc-800">
+          ☰ 标签<span v-if="activeTag" class="text-blue-600 font-medium">{{ activeTag }}</span>
+        </button>
+        <div class="flex-1"></div>
+        <span class="text-zinc-500">{{ activeTag ? displayList.length + ' 篇' : (status.notes ?? '—') + ' 篇' }}</span>
+      </div>
       <div v-if="loadingList" class="p-4 text-sm text-zinc-600 animate-pulse">加载中…</div>
       <div v-else-if="displayList.length === 0" class="p-4 text-sm text-zinc-600">{{ searchResults ? '无搜索结果' : '无笔记' }}</div>
       <div v-else>
@@ -109,29 +135,31 @@
       </div>
     </main>
 
-    <!-- 右栏：阅读/编辑/版本/事件流 -->
-    <section class="flex-1 min-w-0 flex flex-col">
+    <!-- 右栏：阅读/编辑/版本/事件流（移动端：选中后全屏替换列表） -->
+    <section :class="isMobile ? 'w-full' : 'flex-1'"
+      v-show="!isMobile || note || view==='edit'"
+      class="min-w-0 flex flex-col">
       <!-- 阅读态 -->
       <template v-if="note && view==='read'">
-        <div class="h-11 shrink-0 border-b border-zinc-200 flex items-center gap-2 px-4">
-          <div class="flex gap-1 text-xs">
+        <div class="h-11 shrink-0 border-b border-zinc-200 flex items-center gap-2 px-4 overflow-x-auto">
+          <div class="flex gap-1 text-xs shrink-0">
             <button @click="tab='read'" :class="tab==='read' ? 'bg-zinc-200 text-zinc-900' : 'text-zinc-600 hover:text-zinc-700'" class="px-3 py-1 rounded-md">阅读</button>
             <button @click="tab='versions'" :class="tab==='versions' ? 'bg-zinc-200 text-zinc-900' : 'text-zinc-600 hover:text-zinc-700'" class="px-3 py-1 rounded-md">版本 ({{ versions.length || '' }})</button>
-            <button @click="tab='changes'" :class="tab==='changes' ? 'bg-zinc-200 text-zinc-900' : 'text-zinc-600 hover:text-zinc-700'" class="px-3 py-1 rounded-md">事件流</button>
+            <button @click="tab='changes'" :class="tab==='changes' ? 'bg-zinc-200 text-zinc-900' : 'text-zinc-600 hover:text-zinc-700'" class="px-3 py-1 rounded-md">动态</button>
           </div>
           <div class="flex-1"></div>
-          <div class="flex items-center gap-2 text-xs">
-            <span class="px-1.5 py-0.5 rounded" :class="actorClass(note.updated_by)">{{ note.updated_by }}</span>
+          <div class="flex items-center gap-2 text-xs shrink-0">
+            <span class="px-1.5 py-0.5 rounded hidden sm:inline" :class="actorClass(note.updated_by)">{{ note.updated_by }}</span>
             <span class="text-zinc-600">v{{ note.version }}</span>
-            <span class="text-zinc-600">{{ fmtTime(note.updated_at) }}</span>
-            <button v-if="!showTrash" @click="startEdit" class="text-blue-600 hover:text-blue-300 px-2 py-1 rounded hover:bg-zinc-200">编辑</button>
-            <button v-if="showTrash" @click="restoreNote(note.id)" class="text-green-600 hover:text-green-300 px-2 py-1 rounded hover:bg-zinc-200">恢复</button>
-            <button v-if="!showTrash" @click="deleteNote" class="text-red-600/80 hover:text-red-600 px-2 py-1 rounded hover:bg-zinc-200">删除</button>
+            <span class="text-zinc-600 hidden sm:inline">{{ fmtTime(note.updated_at) }}</span>
+            <button v-if="!showTrash && !readOnly" @click="startEdit" class="text-blue-600 hover:text-blue-300 px-2 py-1 rounded hover:bg-zinc-200">编辑</button>
+            <button v-if="showTrash && !readOnly" @click="restoreNote(note.id)" class="text-green-600 hover:text-green-300 px-2 py-1 rounded hover:bg-zinc-200">恢复</button>
+            <button v-if="!showTrash && !readOnly" @click="deleteNote" class="text-red-600/80 hover:text-red-600 px-2 py-1 rounded hover:bg-zinc-200">删除</button>
           </div>
         </div>
 
         <!-- 阅读内容 -->
-        <div v-if="tab==='read'" class="flex-1 overflow-y-auto px-8 py-6">
+        <div v-if="tab==='read'" class="flex-1 overflow-y-auto px-4 py-5 pb-24 sm:px-8 sm:py-6 sm:pb-12">
           <h1 class="text-xl font-semibold text-zinc-900 mb-1">{{ titleOf(note.title) }}</h1>
           <div class="flex flex-wrap gap-1.5 mb-4">
             <span v-for="t in note.tags" :key="t" @click="selectTag(t)"
@@ -141,15 +169,15 @@
         </div>
 
         <!-- 版本历史 -->
-        <div v-else-if="tab==='versions'" class="flex-1 overflow-y-auto px-8 py-6">
+        <div v-else-if="tab==='versions'" class="flex-1 overflow-y-auto px-4 py-5 pb-24 sm:px-8 sm:py-6 sm:pb-12">
           <div v-if="versions.length === 0" class="text-sm text-zinc-600">无历史版本（仅修改过的笔记有快照）</div>
           <div v-for="v in versions" :key="v.version" class="border border-zinc-200 rounded-lg p-3 mb-2 flex items-center gap-3 max-w-2xl">
             <span class="font-mono text-zinc-600">v{{ v.version }}</span>
             <span class="px-1.5 py-0.5 rounded text-xs" :class="actorClass(v.actor)">{{ v.actor }}</span>
             <span class="text-xs text-zinc-600">{{ fmtTime(v.ts) }}</span>
-            <span class="flex-1 truncate text-xs text-zinc-600">{{ titleOf(v.title) }}</span>
+            <span class="flex-1 truncate text-xs text-zinc-600 hidden sm:inline">{{ titleOf(v.title) }}</span>
             <button @click="previewVersion(v.version)" class="text-xs text-zinc-600 hover:text-zinc-800 px-2 py-1 rounded hover:bg-zinc-200">查看</button>
-            <button @click="rollbackTo(v.version)" class="text-xs text-orange-600 hover:text-orange-300 px-2 py-1 rounded hover:bg-zinc-200">回滚</button>
+            <button v-if="!readOnly" @click="rollbackTo(v.version)" class="text-xs text-orange-600 hover:text-orange-300 px-2 py-1 rounded hover:bg-zinc-200">回滚</button>
           </div>
           <div v-if="versionPreview" class="mt-6 max-w-3xl">
             <div class="text-sm text-zinc-600 mb-2">v{{ versionPreview.version }} 预览：</div>
@@ -157,10 +185,11 @@
           </div>
         </div>
 
-        <!-- 事件流 -->
-        <div v-else class="flex-1 overflow-y-auto px-8 py-6">
-          <div v-for="c in changes" :key="c.id" class="flex items-center gap-3 py-1.5 border-b border-zinc-200 text-sm max-w-2xl">
-            <span class="text-xs text-zinc-600 w-32 shrink-0 font-mono">{{ fmtTime(c.ts) }}</span>
+        <!-- 事件流（当前笔记的变更历史） -->
+        <div v-else class="flex-1 overflow-y-auto px-4 py-5 pb-24 sm:px-8 sm:py-6 sm:pb-12">
+          <div v-for="c in noteChanges" :key="c.id" class="flex items-center gap-3 py-1.5 border-b border-zinc-200 text-sm max-w-2xl">
+            <span class="text-xs text-zinc-600 w-32 shrink-0 font-mono hidden sm:inline">{{ fmtTime(c.ts) }}</span>
+            <span class="text-[10px] text-zinc-600 w-14 shrink-0 font-mono sm:hidden">{{ fmtTime(c.ts).slice(5) }}</span>
             <span class="px-1.5 py-0.5 rounded text-xs shrink-0" :class="actorClass(c.actor)">{{ c.actor }}</span>
             <span class="text-xs shrink-0" :class="{ 'text-red-600': c.op==='delete', 'text-green-600': c.op==='create', 'text-blue-600': c.op==='restore', 'text-zinc-600': c.op==='update' }">{{ c.op }}</span>
             <span class="truncate text-zinc-600 flex-1">{{ titleOf(c.title) }}</span>
@@ -176,7 +205,7 @@
           <button @click="view='read'; showNew=false" class="text-xs text-zinc-600 hover:text-zinc-700 px-3 py-1.5 rounded hover:bg-zinc-200">取消</button>
           <button @click="saveEdit" :disabled="saving" class="text-xs bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-4 py-1.5 rounded-lg font-medium">{{ saving ? '保存中…' : '保存' }}</button>
         </div>
-        <div class="flex-1 overflow-y-auto px-8 py-6 flex flex-col gap-3">
+        <div class="flex-1 overflow-y-auto px-4 py-5 pb-24 sm:px-8 sm:py-6 sm:pb-12 flex flex-col gap-3">
           <input v-model="editForm.title" placeholder="标题（建议带目录前缀，如 03-项目要点/xxx.md）"
             class="bg-zinc-100 border border-zinc-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-zinc-300 w-full max-w-2xl placeholder-zinc-600">
           <textarea v-model="editForm.content_md" placeholder="markdown 正文…（frontmatter 的 tags 数组和正文 #tag 都会被自动提取）"
@@ -193,7 +222,6 @@
       </div>
     </section>
   </div>
-
   <!-- toast -->
   <transition name="fade">
     <div v-if="toast.show" :class="toast.type==='ok' ? 'bg-zinc-200 border-zinc-300' : 'bg-red-50 border-red-300'"
@@ -230,7 +258,14 @@ async function api(method, path, body) {
 const app = createApp({
   setup() {
     const md = window.markdownit({ html: false, linkify: true, breaks: false })
-    const mdRender = (src) => { try { return md.render(src || '') } catch { return '<pre>' + src + '</pre>' } }
+    const mdRender = (src) => {
+      try {
+        // 历史 vault 笔记曾用 Obsidian 双链 [[xxx]]，2026-09-05 数据已清洗；
+        // 此处仅做兜底：漏网双链降级为纯文本（不留括号语法）
+        const pre = String(src || '').replace(/\[\[([^\]\|]+)(?:\|([^\]]+))?\]\]/g, (_, t, a) => (a || t).trim().replace(/\.md$/, ''))
+        return md.render(pre)
+      } catch { return '<pre>' + src + '</pre>' }
+    }
 
     // ── 状态 ──
     const tags = ref([])
@@ -256,6 +291,17 @@ const app = createApp({
     const activeTag = ref(null)
     const showTrash = ref(false)
     const showNew = ref(false)
+    // 移动端布局状态
+    const isMobile = ref(window.matchMedia('(max-width: 767px)').matches)
+    const showTagDrawer = ref(false)
+    window.matchMedia('(max-width: 767px)').addEventListener('change', (e) => {
+      isMobile.value = e.matches
+      if (!e.matches) showTagDrawer.value = false // 回到桌面时收起抽屉
+    })
+
+    // 公网只读模式：非本机访问时隐藏写操作（新建/编辑/删除/恢复/回滚/保存）
+    const isLocal = ref(['localhost', '127.0.0.1', '[::1]', ''].includes(location.hostname) || location.hostname.endsWith('.local'))
+    const readOnly = computed(() => !isLocal.value)
 
     // ── 数据加载 ──
     const loadTags = () => api('GET', '/tags').then((r) => (tags.value = r))
@@ -277,6 +323,8 @@ const app = createApp({
       tab.value = 'read'
       view.value = 'read'
       note.value = await api('GET', '/notes/' + encodeURIComponent(id) + (showTrash.value ? '?deleted=1' : ''))
+      // 预取版本数（tab 徽章显示用；未修改过的笔记是 0 条快照）
+      try { versions.value = await api('GET', `/notes/${encodeURIComponent(id)}/versions`) } catch { versions.value = [] }
     }
 
     async function openVersions() {
@@ -388,6 +436,9 @@ const app = createApp({
       toastTimer = setTimeout(() => (toast.show = false), 2200)
     }
 
+    // 右栏事件流：只显示当前笔记的变更（全局时间线与单篇笔记混在一起会误导）
+    const noteChanges = computed(() => changes.value.filter(c => c.note_id === selectedId.value))
+
     // 中栏列表数据源：搜索结果优先
     const displayList = computed(() => {
       if (searchResults.value) return searchResults.value
@@ -395,9 +446,12 @@ const app = createApp({
     })
 
     function selectTag(tag) {
+      if (tag && typeof tag === 'object') tag = tag.tag // 防御：误传标签对象时取 .tag
       activeTag.value = activeTag.value === tag ? null : tag
       showTrash.value = false
       searchResults.value = null; searchInput.value = ''
+      showTagDrawer.value = false // 移动端：选完标签收起抽屉
+      note.value = null; selectedId.value = null // 移动端：回到列表视图（否则列表仍被笔记视图遮住，像是空的）
       loadNotes()
     }
 
@@ -410,9 +464,10 @@ const app = createApp({
     return {
       tags, status, trashCount, notes, loadingList, selectedId, note, view, editForm, saving, toast, tab,
       versions, versionPreview, changes, searchMode, searchInput, searching, searchResults, activeTag, showTrash, showNew,
+      isMobile, showTagDrawer, readOnly,
       mdRender, loadNotes, openNote, openVersions, previewVersion, rollbackTo, doSearch, clearSearch,
       startEdit, startNew, saveEdit, deleteNote, restoreNote,
-      actorClass, fmtTime, tagSize, titleOf, displayList, selectTag,
+      actorClass, fmtTime, tagSize, titleOf, displayList, noteChanges, selectTag,
     }
   },
 })
@@ -423,5 +478,7 @@ app.mount('#app')
 </script>
 
 <!-- ── 模板 ── -->
+
+
 </body>
 </html>
