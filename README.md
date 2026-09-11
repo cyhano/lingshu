@@ -139,10 +139,18 @@ GET  /status                                  状态
 | 工具 | 用途 |
 |---|---|
 | `lingshu_recall` | 语义+关键词混合召回（session 开始/需要背景知识时先调这个） |
-| `lingshu_read` | 按 id 或标题读全文 |
-| `lingshu_write` | 写入（无 id 创建、有 id 整体重写；带 version 启用乐观锁） |
+| `lingshu_read` | 按 id 或标题读全文（写前必读，快照版本作为写基线） |
+| `lingshu_write` | 写入（无 id 创建、有 id 整体重写；带 read-before-write 写保护） |
 | `lingshu_search` | 关键词精确搜索（项目名、报错码） |
 | `lingshu_changes` | 拉事件流，感知其他 Agent 的变更 |
+| `lingshu_delete` | 软删（进回收站，可恢复） |
+
+写入保护（MCP 层，防多 Agent 互相覆盖）：
+
+- **read-before-write**：更新路径要求本会话先 `lingshu_read` 过目标笔记，否则直接拒绝——杜绝盲写。
+- **变更检测**：read 之后若笔记版本被其他 Agent 改过，write 返回 `stale_read` 要求重新 read，避免覆盖他人改动。
+- **同题查重**：创建时若已存在同题笔记，返回 `duplicate_title` 提示转为 read + 合并更新（如一天多份日报）。
+- `version` 参数可选；省略时由 read 基线自动带上乐观锁。
 
 ## 自动召唤（hook）
 

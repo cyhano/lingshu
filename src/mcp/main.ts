@@ -32,6 +32,10 @@ interface ToolDef {
   handler: (args: any) => Promise<unknown>
 }
 
+// read-before-write 基线：note_id → { version, title }（read 时快照）
+// write 更新路径要求本会话 read 过目标笔记，且 read 之后版本未被他人改动
+const readBaseline = new Map<string, { version: number; title: string }>()
+
 const tools: ToolDef[] = [
   {
     name: 'lingshu_recall',
@@ -45,13 +49,21 @@ const tools: ToolDef[] = [
   },
   {
     name: 'lingshu_read',
-    description: '按 id 或标题读取笔记全文（markdown）。',
+    description: '按 id 或标题读取笔记全文（markdown）。写入（lingshu_write）前必须先 read 目标笔记；read 之后笔记被其他人改动过则 write 会被拒绝，需重新 read。',
     inputSchema: { type: 'object', properties: { id: { type: 'string', description: '笔记 id 或标题' } }, required: ['id'] },
-    handler: (a) => api('GET', `/notes/${encodeURIComponent(a.id)}`),
+    handler: async (a) => {
+      const note = await api('GET', `/notes/${encodeURIComponent(a.id)}`)
+      // 记录本次 read 的版本，作为后续 write 的基线（read-before-write + 变更检测）
+      if (note?.id) readBaseline.set(note.id, { version: note.version, title: note.title })
+      return note
+    },
   },
   {
     name: 'lingshu_write',
-    description: '写入笔记：无 id 则创建，有 id 则更新。content_md 必须是完整 markdown（整体重写，不做增量拼接）。',
+    description:
+      '写入笔记：无 id 则创建，有 id 则更新。content_md 必须是完整 markdown（整体重写，不做增量拼接）。' +
+      '**写前必须先 lingshu_read**：更新需先 read 过目标笔记（未 read 过直接拒绝）；read 之后笔记被他人改过（版本不匹配）也会拒绝，需重新 read 基于最新版改写。' +
+      '创建时若已存在同题笔记会拒绝并返回已有笔记 id，应转为先 read 再更新（防止重复建篇，如一天多份日报）。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -59,14 +71,46 @@ const tools: ToolDef[] = [
         title: { type: 'string', description: '标题（创建时必填）' },
         content_md: { type: 'string', description: '完整 markdown 正文' },
         tags: { type: 'array', items: { type: 'string' }, description: '标签（可选）' },
-        version: { type: 'number', description: '乐观锁：期望的当前版本号，不匹配返回 409。省略则 last-write-wins 覆盖' },
+        version: { type: 'number', description: '乐观锁：期望的当前版本号，不匹配返回 409。省略则由 read 基线自动带上（推荐）' },
       },
       required: ['content_md'],
     },
-    handler: (a) =>
-      a.id
-        ? api('PUT', `/notes/${encodeURIComponent(a.id)}`, { title: a.title, content_md: a.content_md, tags: a.tags, version: a.version })
-        : api('POST', '/notes', { title: a.title || '未命名', content_md: a.content_md, tags: a.tags }),
+    handler: async (a) => {
+      // ── 更新路径：read-before-write + 变更检测 ──
+      if (a.id) {
+        const baseline = readBaseline.get(a.id)
+        if (!baseline) {
+          return { error: 'read_before_write', message: `笔记 ${a.id} 在本会话未 read 过，先调 lingshu_read 再写入（防止盲写覆盖他人改动）` }
+        }
+        // 变更检测：read 之后版本变了 → 说明有其他人改过，拒绝并要求重读
+        const current = await api('GET', `/notes/${encodeURIComponent(a.id)}`).catch(() => null)
+        if (!current) return { error: 'not_found', message: `笔记 ${a.id} 不存在（可能已被删除）` }
+        if (current.version !== baseline.version) {
+          return {
+            error: 'stale_read',
+            message: `笔记 ${a.id} 在 read 之后被 ${current.updated_by} 改过（read 时 v${baseline.version}，当前 v${current.version}）。请重新 lingshu_read 后基于最新版本改写`,
+          }
+        }
+        const result = await api('PUT', `/notes/${encodeURIComponent(a.id)}`, {
+          title: a.title, content_md: a.content_md, tags: a.tags,
+          version: a.version ?? baseline.version, // 自动带 read 基线做乐观锁
+        })
+        if (result?.id) readBaseline.set(result.id, { version: result.version, title: result.title }) // 写成功后刷新基线
+        return result
+      }
+      // ── 创建路径：同题查重，防重复建篇 ──
+      const title = a.title || '未命名'
+      const dup = await api('GET', `/notes/${encodeURIComponent(title)}`).catch(() => null)
+      if (dup?.id) {
+        return {
+          error: 'duplicate_title',
+          message: `已存在同题笔记「${dup.title}」（id: ${dup.id}，v${dup.version}，${dup.updated_at} 更新）。不要新建，先 lingshu_read 该笔记，然后把内容合并进去更新`,
+        }
+      }
+      const created = await api('POST', '/notes', { title, content_md: a.content_md, tags: a.tags })
+      if (created?.id) readBaseline.set(created.id, { version: created.version, title: created.title })
+      return created
+    },
   },
   {
     name: 'lingshu_search',
@@ -79,6 +123,12 @@ const tools: ToolDef[] = [
     description: '拉取自 since 以来的变更事件流——其他 Agent 改了什么。session 开始时建议先拉一次增量。',
     inputSchema: { type: 'object', properties: { since: { type: 'number', description: '上次拉到的最大 id，默认 0' } } },
     handler: (a) => api('GET', `/changes?since=${a.since ?? 0}`),
+  },
+  {
+    name: 'lingshu_delete',
+    description: '删除笔记（软删除，进回收站，可通过 WebUI 回收站恢复）。按 id 或标题定位。',
+    inputSchema: { type: 'object', properties: { id: { type: 'string', description: '笔记 id 或标题' } }, required: ['id'] },
+    handler: (a) => api('DELETE', `/notes/${encodeURIComponent(a.id)}`),
   },
 ]
 
