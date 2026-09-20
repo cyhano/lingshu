@@ -151,7 +151,7 @@ describe('脏队列状态机', () => {
     // 向量真实写入（v2 起为 BLOB，字节数 = 维度 × 4）
     const emb = (env.repo as any).db.query('SELECT embedding FROM chunks LIMIT 1').get() as { embedding: Uint8Array }
     expect(emb.embedding).not.toBeNull()
-    expect(emb.embedding.byteLength).toBe(8 * 4) // FakeEmbedder 8 维 → 32 字节
+    expect(emb.embedding.byteLength).toBe(64 * 4) // FakeEmbedder 64 维 → 256 字节
   })
 
   test('内容不变的重写不触发重建（hash 判重）', async () => {

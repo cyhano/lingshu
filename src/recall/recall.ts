@@ -17,6 +17,14 @@ export interface RecallHit {
 
 const RRF_K = 60 // 标准倒数排名常数
 
+// ── 融合调参 ──
+// 纯 RRF 只用排名（1/(K+rank)），语义路的真实余弦相似度（0~1）完全不参与排序，
+// 导致「余弦 0.9 的笔记」与「余弦 0.5 的笔记」只要排名相邻，融合分几乎无差别（1/61 vs 1/62），
+// 且 FTS 命中哪怕一条词也能反超高相似度语义命中。这里把真实相似度加权纳入融合分：
+//   fused = VEC_WEIGHT * cos_sim  +  1/(K+rank)  （语义路）
+//   fused = 1/(K+rank)                            （FTS 路，精确词命中）
+const VEC_WEIGHT = 1.0      // 语义相似度权重（cos_sim ∈ [0,1]，加权后与 RRF 项同量纲）
+
 export class RecallService {
   constructor(
     private repo: Repo,
@@ -34,10 +42,17 @@ export class RecallService {
       Promise.resolve().then(() => this.repo.search(q, ftsCandidates).map((r) => r.id)),
     ])
 
-    // ── RRF 融合：score = Σ 1/(K + rank) ──
+    // ── 加权融合：语义路用真实余弦相似度加权，FTS 路用 RRF 排名项 ──
+    // score = VEC_WEIGHT * cos_sim + 1/(K+rank)（语义路）；score = 1/(K+rank)（FTS 路）
     const fused = new Map<string, { score: number; vecScore: number; ftsRank: number; chunkText: string; heading: string }>()
     for (const [rank, hit] of vecRanked.entries()) {
-      fused.set(hit.noteId, { score: 1 / (RRF_K + rank + 1), vecScore: hit.score, ftsRank: 0, chunkText: hit.chunkText, heading: hit.heading })
+      fused.set(hit.noteId, {
+        score: VEC_WEIGHT * hit.score + 1 / (RRF_K + rank + 1),
+        vecScore: hit.score,
+        ftsRank: 0,
+        chunkText: hit.chunkText,
+        heading: hit.heading,
+      })
     }
     for (const [rank, noteId] of ftsRanked.entries()) {
       const existing = fused.get(noteId)

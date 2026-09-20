@@ -31,12 +31,21 @@ export class FakeEmbedder extends Embedder {
     return texts.map((t) => this.fakeVec(t))
   }
   private fakeVec(text: string): number[] {
-    // 生成 8 维伪向量：按文本哈希确定，相同文本同向量，相近前缀有部分相关性
-    const v = new Array(8).fill(0)
-    for (let i = 0; i < text.length; i++) {
-      v[i % 8] += text.charCodeAt(i) / text.length
+    // 生成 64 维伪向量：按「字符 bigram」集合哈希，共享字符序列（同词/同短语）会产生相关向量，
+    // 贴近真实 bge-m3 的「语义相近 → 向量相近」行为，使语义召回排序的测试具备可信度。
+    // 维度取 64（远大于 8）以降低中文 bigram 哈希碰撞，避免无关短文本算出虚高余弦。
+    // 相同文本 → 相同向量（余弦 1）；共享 bigram 越多 → 余弦越高；无关文本 → 余弦趋近 0。
+    const DIM = 64
+    const v = new Array(DIM).fill(0)
+    const s = text.toLowerCase()
+    for (let i = 0; i < s.length; i++) {
+      // 取当前位置的单字符 + 下一个字符构成 bigram，散列到 DIM 维之一并累加
+      const gram = i + 1 < s.length ? s.slice(i, i + 2) : s.slice(i)
+      let h = 0
+      for (let j = 0; j < gram.length; j++) h = (h * 31 + gram.charCodeAt(j)) >>> 0
+      v[h % DIM] += 1
     }
-    const norm = Math.sqrt(v.reduce((s, x) => s + x * x, 0)) || 1
+    const norm = Math.sqrt(v.reduce((sum, x) => sum + x * x, 0)) || 1
     return v.map((x) => x / norm)
   }
 }
