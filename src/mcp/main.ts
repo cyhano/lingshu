@@ -128,6 +128,7 @@ const tools: ToolDef[] = [
       '增量写笔记：append（末尾追加）、insert_before（在标题前插入）、replace_section（替换某标题整个章节），' +
       '按 markdown 标题锚点定位，无需重发全文，降低长笔记「整体重写」的丢内容风险。' +
       '**写前必须先 lingshu_read**（与 lingshu_write 共用 read 基线，read 后被他人改过则拒绝）。' +
+      'replace_section 的 content_md 不含标题（标题沿用 anchor 原样）；误带同名标题会自动剥离。' +
       '锚点找不到会报错，可回退用 lingshu_write 全文写。',
     inputSchema: {
       type: 'object',

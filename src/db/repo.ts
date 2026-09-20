@@ -512,28 +512,49 @@ export class Repo {
   /** 按标题锚点定位正文中的 section 区间，返回 [startLine, endLine)（0-based，含行首偏移，不含换行结尾）。
    *  - anchor 匹配「去掉 # 前缀后 trim 相等」的标题行；同名标题取第一个匹配。
    *  - startLine 指向标题行本身；endLine 指向下一个同级或更高级标题行（不含），无则到文末。
+   *  - title 返回匹配到的原始标题行（含 # 前缀，供 replace_section 沿用原标题）；
+   *    level 取匹配行真实的标题层级（而非 anchor 参数里的 # 个数，anchor 省略 # 前缀也正确）。
    */
-  private findSectionRange(bodyLines: string[], anchor: string): { start: number; end: number } | null {
+  private findSectionRange(bodyLines: string[], anchor: string): { start: number; end: number; title: string; level: number } | null {
     const target = anchor.trim().replace(/^#+\s*/, '')
     if (!target) return null
-    const anchorLevel = (anchor.match(/^#+/) || [''])[0].length
     let start = -1
     let end = bodyLines.length
+    let title = ''
+    let level = 1
     for (let i = 0; i < bodyLines.length; i++) {
       const line = bodyLines[i]
       const m = line.match(/^(#{1,6})\s+(.*)$/)
       if (!m) continue
-      const level = m[1].length
+      const lv = m[1].length
       const text = m[2].trim()
       if (start < 0 && text === target) {
         start = i
-      } else if (start >= 0 && level <= anchorLevel) {
+        title = line
+        level = lv
+      } else if (start >= 0 && lv <= level) {
         // 下一个同级或更高级标题 = section 结束边界
         end = i
         break
       }
     }
-    return start < 0 ? null : { start, end }
+    return start < 0 ? null : { start, end, title, level }
+  }
+
+  /** 剥掉 content 开头与 anchor 同名的标题行（含 # 前缀）及紧随的空行。
+   *  replace_section 约定 content_md 不含标题（标题沿用 anchor 原标题）；
+   *  此处仅做防御：若调用方误带了同名标题，剥掉以避免标题重复。
+   */
+  private stripLeadingTitle(content: string, anchorTitle: string): string {
+    const anchorText = anchorTitle.trim().replace(/^#+\s*/, '')
+    const lines = content.split('\n')
+    const m = lines[0] && lines[0].match(/^(#{1,6})\s+(.*)$/)
+    if (m && m[2].trim() === anchorText) {
+      let i = 1
+      while (i < lines.length && lines[i].trim() === '') i++
+      return lines.slice(i).join('\n').replace(/\n+$/, '')
+    }
+    return content.replace(/^\n+/, '').replace(/\n+$/, '')
   }
 
   /**
@@ -550,13 +571,18 @@ export class Repo {
     const old = this.get(id)
     if (!old) throw new NotFoundError(id)
     const { body, frontmatter } = splitFrontmatter(old.content_md)
-    // bodyLines：正文逐行（去掉末尾多余换行，便于行号稳定）
-    const bodyText = body.replace(/\n+$/, '')
+    // splitFrontmatter 只在 frontmatter 结尾吃掉一个 \n，body 可能以空行（\n）开头；
+    // 统一剥掉前后空白行得到 bodyText，后续所有 slice 都基于 bodyText（相对偏移）。
+    // headEnd 是「正文首字符」在 content_md 中的绝对偏移，仅在最后拼回 frontmatter 时使用。
+    const bodyStart = old.content_md.length - body.length // body 在 content_md 中的起始偏移
+    const leadNewlines = body.length - body.replace(/^\n+/, '').length // 被剥掉的前导换行数
+    const bodyText = body.replace(/^\n+/, '').replace(/\n+$/, '')
     const bodyLines = bodyText === '' ? [] : bodyText.split('\n')
-    const headEnd = old.content_md.length - body.length // frontmatter 占用的前缀长度
+    const headEnd = bodyStart + leadNewlines // 正文首字符在 content_md 中的偏移
     const linesToOffset = (lineIdx: number): number => {
-      if (bodyLines.length === 0) return headEnd
-      let off = headEnd
+      // 返回「相对 bodyText 开头」的偏移，供 bodyText.slice 使用（不能加 headEnd）
+      if (bodyLines.length === 0) return 0
+      let off = 0
       for (let i = 0; i < lineIdx; i++) off += bodyLines[i].length + 1
       return off
     }
@@ -578,14 +604,18 @@ export class Repo {
       const secStart = linesToOffset(range.start)
       content = bodyText.slice(0, secStart).replace(/\s+$/, '') + '\n\n' + input.content_md + '\n\n' + bodyText.slice(secStart)
     } else {
-      // replace_section
+      // replace_section：用 content_md 替换 anchor 标题那一整个 section。
+      // 标题沿用 anchor 匹配到的原标题（range.title）；content_md 约定不含标题，
+      // 若误带了同名标题则剥离（stripLeadingTitle），避免标题重复。
       const range = this.findSectionRange(bodyLines, input.anchor!)
       if (!range) throw new NotFoundError(`锚点标题「${input.anchor}」不存在`)
       const secStart = linesToOffset(range.start)
       const secEnd = linesToOffset(range.end)
       const before = bodyText.slice(0, secStart).replace(/\s+$/, '')
       const after = bodyText.slice(secEnd)
-      content = (before ? before + '\n\n' : '') + input.content_md + (after ? '\n\n' + after : '')
+      const sectionBody = this.stripLeadingTitle(input.content_md, range.title)
+      const newSection = range.title + (sectionBody ? '\n\n' + sectionBody : '')
+      content = (before ? before + '\n\n' : '') + newSection + (after ? '\n\n' + after : '')
     }
 
     // 拼回 frontmatter（若无 frontmatter 则 frontmatterJson 为空对象，splitFrontmatter 已剥离）
