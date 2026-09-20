@@ -113,6 +113,48 @@ const tools: ToolDef[] = [
     },
   },
   {
+    name: 'lingshu_patch',
+    description:
+      '增量写笔记：append（末尾追加）、insert_before（在标题前插入）、replace_section（替换某标题整个章节），' +
+      '按 markdown 标题锚点定位，无需重发全文，降低长笔记「整体重写」的丢内容风险。' +
+      '**写前必须先 lingshu_read**（与 lingshu_write 共用 read 基线，read 后被他人改过则拒绝）。' +
+      '锚点找不到会报错，可回退用 lingshu_write 全文写。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: '笔记 id' },
+        op: { type: 'string', enum: ['append', 'insert_before', 'replace_section'], description: '操作类型' },
+        content_md: { type: 'string', description: '要追加/插入/替换的 markdown 片段（片段，非全文）' },
+        anchor: { type: 'string', description: '标题锚点，如「## 已知坑」；append 可省略，insert_before/replace_section 必填' },
+        version: { type: 'number', description: '乐观锁版本号，省略则用 read 基线（推荐）' },
+      },
+      required: ['id', 'op', 'content_md'],
+    },
+    handler: async (a) => {
+      // 复用 read-before-write 基线：必须先 read，且 read 后版本未被他人改动
+      const baseline = readBaseline.get(a.id)
+      if (!baseline) {
+        return { error: 'read_before_write', message: `笔记 ${a.id} 在本会话未 read 过，先调 lingshu_read 再 patch` }
+      }
+      const current = await api('GET', `/notes/${encodeURIComponent(a.id)}`).catch(() => null)
+      if (!current) return { error: 'not_found', message: `笔记 ${a.id} 不存在（可能已被删除）` }
+      if (current.version !== baseline.version) {
+        return {
+          error: 'stale_read',
+          message: `笔记 ${a.id} 在 read 之后被 ${current.updated_by} 改过（read 时 v${baseline.version}，当前 v${current.version}）。请重新 lingshu_read 后重试`,
+        }
+      }
+      const result = await api('PATCH', `/notes/${encodeURIComponent(a.id)}`, {
+        op: a.op,
+        content_md: a.content_md,
+        anchor: a.anchor,
+        version: a.version ?? baseline.version,
+      })
+      if (result?.id) readBaseline.set(result.id, { version: result.version, title: result.title })
+      return result
+    },
+  },
+  {
     name: 'lingshu_search',
     description: 'FTS 关键词精确搜索（项目名、报错码等精确词用这个，比语义召回准）。',
     inputSchema: { type: 'object', properties: { q: { type: 'string' }, limit: { type: 'number' } }, required: ['q'] },

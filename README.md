@@ -104,7 +104,7 @@ DELETE /notes/:id                             软删
 POST /notes/:id/restore                       恢复
 POST /notes/:id/rollback {version}            回滚到历史版本
 GET  /notes/:id/versions                      版本历史
-GET  /notes?tag=&limit=                       列表
+GET  /notes?tag=&limit=&deleted=               列表（deleted=1 只返回已软删/回收站；deleted=all 含未删与已删；默认只返回未删）
 GET  /tags                                    标签云（计数）
 GET  /trash/count                             回收站计数
 GET  /search?q=                               FTS 搜索
@@ -141,6 +141,7 @@ GET  /status                                  状态
 | `lingshu_recall` | 语义+关键词混合召回（session 开始/需要背景知识时先调这个） |
 | `lingshu_read` | 按 id 或标题读全文（写前必读，快照版本作为写基线） |
 | `lingshu_write` | 写入（无 id 创建、有 id 整体重写；带 read-before-write 写保护） |
+| `lingshu_patch` | 增量写（append / insert_before / replace_section，按标题锚点定位，无需重发全文） |
 | `lingshu_search` | 关键词精确搜索（项目名、报错码） |
 | `lingshu_changes` | 拉事件流，感知其他 Agent 的变更 |
 | `lingshu_delete` | 软删（进回收站，可恢复） |
@@ -151,6 +152,12 @@ GET  /status                                  状态
 - **变更检测**：read 之后若笔记版本被其他 Agent 改过，write 返回 `stale_read` 要求重新 read，避免覆盖他人改动。
 - **同题查重**：创建时若已存在同题笔记，返回 `duplicate_title` 提示转为 read + 合并更新（如一天多份日报）。
 - `version` 参数可选；省略时由 read 基线自动带上乐观锁。
+
+增量写（`lingshu_patch`，解决长笔记「改一行也要整体重写全文」的丢内容风险）：
+
+- 三种模式：`append`（末尾/某章节末追加）、`insert_before`（某标题前插入）、`replace_section`（替换某标题整个章节）。
+- 用 markdown 标题锚点定位（如 `anchor: "## 已知坑"`），`#` 前缀可省略，同名标题取第一个；锚点找不到返回 404，可回退 `lingshu_write` 全文写。
+- 与 `lingshu_write` 共用 read-before-write 基线和乐观锁，patch 也是一次 update（进版本历史、可回滚）。
 
 ## 自动召唤（hook）
 

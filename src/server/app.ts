@@ -68,6 +68,25 @@ export function createApp(deps: AppDeps): Hono {
     return c.json({ ...note, tags: repo.getTags(note.id) })
   })
 
+  // 增量写：append / insert_before / replace_section，按标题锚点定位，复用 update 的乐观锁
+  app.patch('/notes/:id', async (c) => {
+    const body = await c.req.json<{ op: 'append' | 'insert_before' | 'replace_section'; content_md: string; anchor?: string; version?: number }>()
+    if (typeof body.content_md !== 'string' || !['append', 'insert_before', 'replace_section'].includes(body.op)) {
+      return c.json({ error: 'bad_request', message: 'op（append/insert_before/replace_section）和 content_md 必填' }, 400)
+    }
+    if (body.op !== 'append' && !body.anchor) {
+      return c.json({ error: 'bad_request', message: `${body.op} 需要 anchor 标题锚点` }, 400)
+    }
+    const note = repo.patch(c.req.param('id'), {
+      op: body.op,
+      content_md: body.content_md,
+      anchor: body.anchor,
+      expectedVersion: body.version,
+      actor: actorOf(c),
+    })
+    return c.json({ ...note, tags: repo.getTags(note.id) })
+  })
+
   app.delete('/notes/:id', (c) => {
     repo.delete(c.req.param('id'), actorOf(c))
     return c.json({ ok: true })
@@ -93,9 +112,13 @@ export function createApp(deps: AppDeps): Hono {
     return c.json(snap)
   })
 
+  // deleted: 1/only = 只返回已软删（回收站）；all = 全部；默认 = 只返回未删
+  const deletedMode = (raw: string | undefined): 'only' | 'all' | undefined =>
+    raw === '1' || raw === 'only' ? 'only' : raw === 'all' ? 'all' : undefined
+
   // ── 列表 / 搜索 / 召回 ──
   app.get('/notes', (c) =>
-    c.json(repo.list({ tag: c.req.query('tag'), limit: numOr(c.req.query('limit'), 50, 1, 500), includeDeleted: c.req.query('deleted') === '1' })),
+    c.json(repo.list({ tag: c.req.query('tag'), limit: numOr(c.req.query('limit'), 50, 1, 500), deleted: deletedMode(c.req.query('deleted')) })),
   )
 
   // 标签体系概览（Agent 选 tag 筛选前先看这个）

@@ -145,17 +145,27 @@ export class Repo {
     return row
   }
 
-  list(opts: { tag?: string; limit?: number; includeDeleted?: boolean } = {}): NoteRow[] {
+  /**
+   * 列表查询。
+   * deleted: 'only' = 只返回已软删（回收站）；'all' = 含未删与已删；undefined = 默认只返回未删
+   */
+  list(opts: { tag?: string; limit?: number; deleted?: 'only' | 'all' } = {}): NoteRow[] {
     const limit = Math.min(opts.limit ?? 50, 500)
+    // 三态过滤条件：only → 只看已删；all → 不过滤；默认 → 排除已删
+    const filter =
+      opts.deleted === 'only' ? 'WHERE deleted_at IS NOT NULL' :
+      opts.deleted === 'all' ? '' :
+      'WHERE deleted_at IS NULL'
+    const tagFilter = opts.deleted === 'all' ? '' : opts.deleted === 'only' ? 'AND n.deleted_at IS NOT NULL' : 'AND n.deleted_at IS NULL'
     if (opts.tag) {
       return this.db
         .query(`SELECT n.* FROM notes n JOIN tags t ON t.note_id = n.id
-                WHERE t.tag = ? ${opts.includeDeleted ? '' : 'AND n.deleted_at IS NULL'}
+                WHERE t.tag = ? ${tagFilter}
                 ORDER BY n.updated_at DESC LIMIT ?`)
         .all(opts.tag, limit) as NoteRow[]
     }
     return this.db
-      .query(`SELECT * FROM notes ${opts.includeDeleted ? '' : 'WHERE deleted_at IS NULL'}
+      .query(`SELECT * FROM notes ${filter}
               ORDER BY updated_at DESC LIMIT ?`)
       .all(limit) as NoteRow[]
   }
@@ -465,5 +475,96 @@ export class Repo {
       versions: one('SELECT COUNT(*) c FROM versions'),
       changes: one('SELECT COUNT(*) c FROM changes'),
     }
+  }
+
+  // ── 增量写（patch）：按标题锚点定位段落，做 append / insert_before / replace_section ──
+  // 目的：给 Agent 一个低风险的局部写原语，避免「改一行也要整体重写全文」带来的隐性丢内容风险。
+  // 定位复用笔记正文的 markdown 标题结构（与 rebuildChunks 的标题切分口径一致），
+  // 不依赖 chunks 表（软删/未向量化的笔记也能 patch）。
+
+  /** 按标题锚点定位正文中的 section 区间，返回 [startLine, endLine)（0-based，含行首偏移，不含换行结尾）。
+   *  - anchor 匹配「去掉 # 前缀后 trim 相等」的标题行；同名标题取第一个匹配。
+   *  - startLine 指向标题行本身；endLine 指向下一个同级或更高级标题行（不含），无则到文末。
+   */
+  private findSectionRange(bodyLines: string[], anchor: string): { start: number; end: number } | null {
+    const target = anchor.trim().replace(/^#+\s*/, '')
+    if (!target) return null
+    const anchorLevel = (anchor.match(/^#+/) || [''])[0].length
+    let start = -1
+    let end = bodyLines.length
+    for (let i = 0; i < bodyLines.length; i++) {
+      const line = bodyLines[i]
+      const m = line.match(/^(#{1,6})\s+(.*)$/)
+      if (!m) continue
+      const level = m[1].length
+      const text = m[2].trim()
+      if (start < 0 && text === target) {
+        start = i
+      } else if (start >= 0 && level <= anchorLevel) {
+        // 下一个同级或更高级标题 = section 结束边界
+        end = i
+        break
+      }
+    }
+    return start < 0 ? null : { start, end }
+  }
+
+  /**
+   * 增量写。三种模式：
+   *  - append:           把 content_md 追加到笔记末尾（anchor 可省略；给 anchor 则追加到该 section 末尾）
+   *  - insert_before:    在 anchor 标题之前插入 content_md（anchor 必填）
+   *  - replace_section:  用 content_md 整体替换 anchor 标题那一整个 section（anchor 必填）
+   * 所有模式都复用 update() 的版本快照与乐观锁，与全文写天然互斥、可回滚。
+   */
+  patch(
+    id: string,
+    input: { op: 'append' | 'insert_before' | 'replace_section'; content_md: string; anchor?: string; actor: Actor; expectedVersion?: number },
+  ): NoteRow {
+    const old = this.get(id)
+    if (!old) throw new NotFoundError(id)
+    const { body, frontmatter } = splitFrontmatter(old.content_md)
+    // bodyLines：正文逐行（去掉末尾多余换行，便于行号稳定）
+    const bodyText = body.replace(/\n+$/, '')
+    const bodyLines = bodyText === '' ? [] : bodyText.split('\n')
+    const headEnd = old.content_md.length - body.length // frontmatter 占用的前缀长度
+    const linesToOffset = (lineIdx: number): number => {
+      if (bodyLines.length === 0) return headEnd
+      let off = headEnd
+      for (let i = 0; i < lineIdx; i++) off += bodyLines[i].length + 1
+      return off
+    }
+    let content: string
+
+    if (input.op === 'append') {
+      // 无 anchor：直接追加到正文末尾；有 anchor：追加到该 section 的末尾（下一个同级/更高级标题之前）
+      if (!input.anchor) {
+        content = bodyText === '' ? input.content_md : bodyText + '\n\n' + input.content_md
+      } else {
+        const range = this.findSectionRange(bodyLines, input.anchor)
+        if (!range) throw new NotFoundError(`锚点标题「${input.anchor}」不存在`)
+        const secEnd = linesToOffset(range.end)
+        content = bodyText.slice(0, secEnd).replace(/\s+$/, '') + '\n\n' + input.content_md + bodyText.slice(secEnd)
+      }
+    } else if (input.op === 'insert_before') {
+      const range = this.findSectionRange(bodyLines, input.anchor!)
+      if (!range) throw new NotFoundError(`锚点标题「${input.anchor}」不存在`)
+      const secStart = linesToOffset(range.start)
+      content = bodyText.slice(0, secStart).replace(/\s+$/, '') + '\n\n' + input.content_md + '\n\n' + bodyText.slice(secStart)
+    } else {
+      // replace_section
+      const range = this.findSectionRange(bodyLines, input.anchor!)
+      if (!range) throw new NotFoundError(`锚点标题「${input.anchor}」不存在`)
+      const secStart = linesToOffset(range.start)
+      const secEnd = linesToOffset(range.end)
+      const before = bodyText.slice(0, secStart).replace(/\s+$/, '')
+      const after = bodyText.slice(secEnd)
+      content = (before ? before + '\n\n' : '') + input.content_md + (after ? '\n\n' + after : '')
+    }
+
+    // 拼回 frontmatter（若无 frontmatter 则 frontmatterJson 为空对象，splitFrontmatter 已剥离）
+    const full = frontmatter && Object.keys(frontmatter).length > 0
+      ? old.content_md.slice(0, headEnd) + content
+      : content
+    return this.update(id, { content_md: full, actor: input.actor, expectedVersion: input.expectedVersion })
   }
 }

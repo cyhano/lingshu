@@ -12,6 +12,9 @@ backups/
 .env
 .env.*
 
+# 工具本地缓存
+.codegraph/
+
 # 编辑器
 .DS_Store
 *.swp

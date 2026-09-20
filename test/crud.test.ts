@@ -161,6 +161,8 @@ describe('软删与恢复', () => {
     const id = json.id
 
     await req(env.app, 'DELETE', `/notes/${id}`, undefined, 'cc')
+    // 另建一篇不删，作为「未删存在」锚点
+    const { json: alive } = await req(env.app, 'POST', '/notes', { title: '不删的', content_md: 'y' })
     // 默认读 → 404
     expect((await req(env.app, 'GET', `/notes/${id}`)).status).toBe(404)
     // deleted=1 可读
@@ -168,9 +170,14 @@ describe('软删与恢复', () => {
     // 默认列表不含
     const list = await req(env.app, 'GET', '/notes?limit=500')
     expect(list.json.find((n: any) => n.id === id)).toBeUndefined()
-    // deleted 列表含
+    // deleted 列表：只返回已删，不含未删（回收站语义）
     const dlist = await req(env.app, 'GET', '/notes?deleted=1&limit=500')
     expect(dlist.json.find((n: any) => n.id === id)).toBeDefined()
+    expect(dlist.json.every((n: any) => n.deleted_at !== null)).toBe(true)
+    // deleted=all 才是「全部（含未删）」
+    const alist = await req(env.app, 'GET', '/notes?deleted=all&limit=500')
+    expect(alist.json.find((n: any) => n.id === id)).toBeDefined()
+    expect(alist.json.find((n: any) => n.id === alive.id)).toBeDefined()
 
     const rs = await req(env.app, 'POST', `/notes/${id}/restore`, undefined, 'cc')
     expect(rs.json.deleted_at).toBeNull()
