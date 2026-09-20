@@ -141,10 +141,26 @@ export function createApp(deps: AppDeps): Hono {
         fts_rank: h.fts_rank,
         tags: h.tags,
         snippet: h.snippet.slice(0, 150),
+        heading: h.heading,
         updated_at: h.note.updated_at,
       })),
     )
   })
+
+  // ── 召回反馈（召回质量闭环）──
+  app.post('/recall/:id/feedback', async (c) => {
+    const body = await c.req.json<{ query?: string; verdict?: 'hit' | 'miss' }>()
+    if (body.verdict !== 'hit' && body.verdict !== 'miss') {
+      return c.json({ error: 'bad_request', message: 'verdict 必填（hit / miss）' }, 400)
+    }
+    const note = repo.get(c.req.param('id')) ?? repo.resolve(c.req.param('id'))
+    if (!note) return c.json({ error: 'not_found' }, 404)
+    repo.recordFeedback({ noteId: note.id, query: body.query ?? '', verdict: body.verdict, actor: actorOf(c) })
+    return c.json({ ok: true, note_id: note.id, verdict: body.verdict })
+  })
+
+  // 每篇笔记的反馈统计（识别「召回了但没用」的笔记）
+  app.get('/recall/feedback', (c) => c.json(repo.feedbackStats(numOr(c.req.query('limit'), 50, 1, 500))))
 
   // ── 事件流（多 Agent 感知）──
   app.get('/changes', (c) =>

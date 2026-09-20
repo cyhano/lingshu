@@ -480,6 +480,30 @@ export class Repo {
     }
   }
 
+  // ── 召回反馈（召回质量闭环）──
+
+  /** 记录一条召回反馈（hit=帮上忙 / miss=没用），供长期调优与去重参考 */
+  recordFeedback(input: { noteId: string; query: string; verdict: 'hit' | 'miss'; actor: Actor }): void {
+    this.db
+      .query('INSERT INTO recall_feedback (note_id, query, verdict, actor, ts) VALUES (?, ?, ?, ?, ?)')
+      .run(input.noteId, input.query, input.verdict, input.actor, now())
+  }
+
+  /** 每篇笔记的反馈统计（按 miss 数降序，识别「召回了但没用」的笔记） */
+  feedbackStats(limit = 50): Array<{ note_id: string; title: string; hit: number; miss: number; total: number }> {
+    return this.db
+      .query(`SELECT f.note_id, n.title,
+                SUM(CASE WHEN f.verdict = 'hit' THEN 1 ELSE 0 END) as hit,
+                SUM(CASE WHEN f.verdict = 'miss' THEN 1 ELSE 0 END) as miss,
+                COUNT(*) as total
+              FROM recall_feedback f
+              JOIN notes n ON n.id = f.note_id
+              GROUP BY f.note_id
+              ORDER BY miss DESC, total DESC
+              LIMIT ?`)
+      .all(limit) as Array<{ note_id: string; title: string; hit: number; miss: number; total: number }>
+  }
+
   // ── 增量写（patch）：按标题锚点定位段落，做 append / insert_before / replace_section ──
   // 目的：给 Agent 一个低风险的局部写原语，避免「改一行也要整体重写全文」带来的隐性丢内容风险。
   // 定位复用笔记正文的 markdown 标题结构（与 rebuildChunks 的标题切分口径一致），

@@ -3,7 +3,7 @@
 
 import { Repo, NoteRow } from '../db/repo.ts'
 import { Embedder } from '../embed/embedder.ts'
-import { VectorIndex } from './vectorIndex.ts'
+import { VectorIndex, VectorHit } from './vectorIndex.ts'
 
 export interface RecallHit {
   note: NoteRow
@@ -11,6 +11,7 @@ export interface RecallHit {
   vec_score: number      // 语义相似度（0-1，无则 0）
   fts_rank: number       // FTS 命中排名（1 起，未命中为 0）
   snippet: string        // 最佳匹配 chunk 摘要
+  heading: string        // 命中 chunk 所属标题路径（语义路命中时有值，纯 FTS 命中为空）
   tags: string[]
 }
 
@@ -34,9 +35,9 @@ export class RecallService {
     ])
 
     // ── RRF 融合：score = Σ 1/(K + rank) ──
-    const fused = new Map<string, { score: number; vecScore: number; ftsRank: number; chunkText: string }>()
+    const fused = new Map<string, { score: number; vecScore: number; ftsRank: number; chunkText: string; heading: string }>()
     for (const [rank, hit] of vecRanked.entries()) {
-      fused.set(hit.noteId, { score: 1 / (RRF_K + rank + 1), vecScore: hit.score, ftsRank: 0, chunkText: hit.chunkText })
+      fused.set(hit.noteId, { score: 1 / (RRF_K + rank + 1), vecScore: hit.score, ftsRank: 0, chunkText: hit.chunkText, heading: hit.heading })
     }
     for (const [rank, noteId] of ftsRanked.entries()) {
       const existing = fused.get(noteId)
@@ -44,7 +45,7 @@ export class RecallService {
         existing.score += 1 / (RRF_K + rank + 1)
         existing.ftsRank = rank + 1
       } else {
-        fused.set(noteId, { score: 1 / (RRF_K + rank + 1), vecScore: 0, ftsRank: rank + 1, chunkText: '' })
+        fused.set(noteId, { score: 1 / (RRF_K + rank + 1), vecScore: 0, ftsRank: rank + 1, chunkText: '', heading: '' })
       }
     }
 
@@ -62,6 +63,7 @@ export class RecallService {
         vec_score: meta.vecScore,
         fts_rank: meta.ftsRank,
         snippet: meta.chunkText || this.makeSnippet(note.content_md, q),
+        heading: meta.heading,
         tags: this.repo.getTags(noteId),
       })
     }
@@ -70,9 +72,9 @@ export class RecallService {
 
   /** 语义路：query 向量 vs 内存矩阵（VectorIndex），取每篇笔记最佳 chunk */
   private async vectorRank(query: string, candidates: number) {
-    if (!this.embedder.ready) return [] as Array<{ noteId: string; score: number; chunkText: string }>
+    if (!this.embedder.ready) return [] as VectorHit[]
     const qvec = await this.embedder.embedOne(query)
-    if (qvec.length === 0) return [] as Array<{ noteId: string; score: number; chunkText: string }>
+    if (qvec.length === 0) return [] as VectorHit[]
 
     // 向量矩阵在内存中（VectorIndex），搜索本身零读盘零反序列化
     return this.index.search(new Float32Array(qvec), candidates)

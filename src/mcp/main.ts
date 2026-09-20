@@ -32,9 +32,18 @@ interface ToolDef {
   handler: (args: any) => Promise<unknown>
 }
 
-// read-before-write 基线：note_id → { version, title }（read 时快照）
-// write 更新路径要求本会话 read 过目标笔记，且 read 之后版本未被他人改动
-const readBaseline = new Map<string, { version: number; title: string }>()
+// read-before-write 基线：key → { version, title }（read 时快照）
+// key 同时登记「内部 id」与「标题」两种形态，write/patch 无论传 id 还是标题都能命中。
+// write 更新路径要求本会话 read 过目标笔记，且 read 之后版本未被他人改动。
+const readBaseline = new Map<string, { version: number; title: string; id: string }>()
+
+/** 记录 read 基线：同时登记 id 与标题两个 key，消除「read 用标题、write 用 id（或反之）」查不到基线的不一致 */
+function recordBaseline(note: { id: string; title: string; version: number }): void {
+  if (!note?.id) return
+  const entry = { version: note.version, title: note.title, id: note.id }
+  readBaseline.set(note.id, entry)
+  readBaseline.set(note.title, entry)
+}
 
 const tools: ToolDef[] = [
   {
@@ -54,7 +63,7 @@ const tools: ToolDef[] = [
     handler: async (a) => {
       const note = await api('GET', `/notes/${encodeURIComponent(a.id)}`)
       // 记录本次 read 的版本，作为后续 write 的基线（read-before-write + 变更检测）
-      if (note?.id) readBaseline.set(note.id, { version: note.version, title: note.title })
+      recordBaseline(note)
       return note
     },
   },
@@ -91,11 +100,12 @@ const tools: ToolDef[] = [
             message: `笔记 ${a.id} 在 read 之后被 ${current.updated_by} 改过（read 时 v${baseline.version}，当前 v${current.version}）。请重新 lingshu_read 后基于最新版本改写`,
           }
         }
-        const result = await api('PUT', `/notes/${encodeURIComponent(a.id)}`, {
+        // 用真实 id 做 PUT（a.id 可能是标题），乐观锁带 read 基线
+        const result = await api('PUT', `/notes/${encodeURIComponent(current.id)}`, {
           title: a.title, content_md: a.content_md, tags: a.tags,
-          version: a.version ?? baseline.version, // 自动带 read 基线做乐观锁
+          version: a.version ?? baseline.version,
         })
-        if (result?.id) readBaseline.set(result.id, { version: result.version, title: result.title }) // 写成功后刷新基线
+        if (result?.id) recordBaseline(result) // 写成功后刷新基线
         return result
       }
       // ── 创建路径：同题查重，防重复建篇 ──
@@ -108,7 +118,7 @@ const tools: ToolDef[] = [
         }
       }
       const created = await api('POST', '/notes', { title, content_md: a.content_md, tags: a.tags })
-      if (created?.id) readBaseline.set(created.id, { version: created.version, title: created.title })
+      if (created?.id) recordBaseline(created)
       return created
     },
   },
@@ -144,13 +154,13 @@ const tools: ToolDef[] = [
           message: `笔记 ${a.id} 在 read 之后被 ${current.updated_by} 改过（read 时 v${baseline.version}，当前 v${current.version}）。请重新 lingshu_read 后重试`,
         }
       }
-      const result = await api('PATCH', `/notes/${encodeURIComponent(a.id)}`, {
+      const result = await api('PATCH', `/notes/${encodeURIComponent(current.id)}`, {
         op: a.op,
         content_md: a.content_md,
         anchor: a.anchor,
         version: a.version ?? baseline.version,
       })
-      if (result?.id) readBaseline.set(result.id, { version: result.version, title: result.title })
+      if (result?.id) recordBaseline(result)
       return result
     },
   },
@@ -171,6 +181,22 @@ const tools: ToolDef[] = [
     description: '删除笔记（软删除，进回收站，可通过 WebUI 回收站恢复）。按 id 或标题定位。',
     inputSchema: { type: 'object', properties: { id: { type: 'string', description: '笔记 id 或标题' } }, required: ['id'] },
     handler: (a) => api('DELETE', `/notes/${encodeURIComponent(a.id)}`),
+  },
+  {
+    name: 'lingshu_feedback',
+    description:
+      '给一条召回结果打反馈：hit=这条笔记帮上了忙，miss=没用/答非所问。' +
+      '用于沉淀召回质量信号，长期调优混合召回、识别「召回了但没用」的笔记。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: '笔记 id 或标题' },
+        query: { type: 'string', description: '本次召回对应的查询词（可选，留空也能记）' },
+        verdict: { type: 'string', enum: ['hit', 'miss'], description: 'hit=帮上忙 / miss=没用' },
+      },
+      required: ['id', 'verdict'],
+    },
+    handler: (a) => api('POST', `/recall/${encodeURIComponent(a.id)}/feedback`, { query: a.query ?? '', verdict: a.verdict }),
   },
 ]
 

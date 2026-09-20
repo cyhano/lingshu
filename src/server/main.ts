@@ -29,6 +29,7 @@ const embedder = new Embedder({ apiKey: config.siliconflowKey })
 const index = new VectorIndex(repo)
 const pipeline = new EmbedPipeline(repo, embedder, () => index.markDirty())
 const recall = new RecallService(repo, embedder, index)
+index.warmup() // 启动预热：消除首次语义召回的冷启动延迟
 
 const scheduler = new Scheduler({
   db,

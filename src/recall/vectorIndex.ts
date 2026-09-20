@@ -9,6 +9,7 @@ export interface VectorHit {
   noteId: string
   score: number
   chunkText: string
+  heading: string  // 命中 chunk 所属的标题路径（如「## 已知坑」），用于 Agent 精准引用到段落
 }
 
 /**
@@ -22,6 +23,7 @@ export class VectorIndex {
   private norms: Float32Array | null = null // 每 chunk 预计算模长（避免每次点积重复算）
   private noteIds: string[] = []
   private chunkTexts: string[] = []
+  private chunkHeadings: string[] = []
   private dim = 0
   private dirty = true
 
@@ -61,11 +63,16 @@ export class VectorIndex {
       const noteId = this.noteIds[i]
       const prev = bestPerNote.get(noteId)
       if (!prev || score > prev.score) {
-        bestPerNote.set(noteId, { noteId, score, chunkText: this.chunkTexts[i] })
+        bestPerNote.set(noteId, { noteId, score, chunkText: this.chunkTexts[i], heading: this.chunkHeadings[i] })
       }
     }
 
     return [...bestPerNote.values()].sort((a, b) => b.score - a.score).slice(0, candidates)
+  }
+
+  /** 预热：立即从 repo 加载构建矩阵（消除首次 search 的冷启动延迟 ~20ms）。daemon 启动后调用一次。 */
+  warmup(): void {
+    this.rebuild()
   }
 
   /** 从 repo 全量加载已向量化 chunk，构建扁平矩阵（BLOB 直接 view，零 JSON.parse） */
@@ -78,6 +85,7 @@ export class VectorIndex {
       this.norms = null
       this.noteIds = []
       this.chunkTexts = []
+      this.chunkHeadings = []
       this.dim = 0
       return
     }
@@ -95,16 +103,24 @@ export class VectorIndex {
       this.norms = null
       this.noteIds = []
       this.chunkTexts = []
+      this.chunkHeadings = []
       this.dim = 0
       return
     }
 
     // 收集合法 chunk（维度一致、字节数 = dim*4），跳过脏 chunk
-    const valid: Array<{ noteId: string; text: string; vec: Float32Array }> = []
+    const valid: Array<{ noteId: string; text: string; heading: string; vec: Float32Array }> = []
     let corrupted = 0
     for (const c of chunks) {
       if (!c.embedding || c.embedding.byteLength !== dim * 4) { corrupted++; continue }
-      valid.push({ noteId: c.note_id, text: c.content, vec: new Float32Array(c.embedding.buffer) })
+      // 显式传 byteOffset/length：c.embedding 是 Uint8Array，若未来被 subarray 切片则 byteOffset 非 0，
+      // 直接 view 整个 buffer 会读到错误数据；这里按实际字节区间精确构造 Float32Array view
+      valid.push({
+        noteId: c.note_id,
+        text: c.content,
+        heading: c.heading_path,
+        vec: new Float32Array(c.embedding.buffer, c.embedding.byteOffset, c.embedding.byteLength / 4),
+      })
     }
 
     const n = valid.length
@@ -112,17 +128,20 @@ export class VectorIndex {
     const norms = new Float32Array(n)
     const noteIds = new Array<string>(n)
     const chunkTexts = new Array<string>(n)
+    const chunkHeadings = new Array<string>(n)
     for (let i = 0; i < n; i++) {
       mat.set(valid[i].vec, i * dim)
       norms[i] = norm(valid[i].vec)
       noteIds[i] = valid[i].noteId
       chunkTexts[i] = valid[i].text
+      chunkHeadings[i] = valid[i].heading
     }
 
     this.mat = mat
     this.norms = norms
     this.noteIds = noteIds
     this.chunkTexts = chunkTexts
+    this.chunkHeadings = chunkHeadings
     this.dim = dim
 
     if (corrupted > 0) {

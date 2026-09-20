@@ -6,7 +6,7 @@ import { Database } from 'bun:sqlite'
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 
-export const SCHEMA_VERSION = 2
+export const SCHEMA_VERSION = 3
 
 export function openDb(dbPath: string): Database {
   // 确保父目录存在（首次运行 ~/.lingshu 尚未创建）
@@ -28,6 +28,9 @@ export function migrate(db: Database): void {
   // v2：embedding 从 JSON 文本迁移为二进制 BLOB（Float32Array.buffer）
   // 收益：磁盘占用降约 5 倍（21.7KB→4KB/chunk）、召回缓存构建零 JSON.parse
   if (row.user_version < 2) migrateV2(db)
+
+  // v3：新增召回反馈表（recall_feedback），沉淀「这条召回有没有帮上忙」的信号
+  if (row.user_version < 3) migrateV3(db)
 
   db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`)
 }
@@ -162,4 +165,24 @@ function migrateV2(db: Database): void {
     }
   })()
   console.log(`[lingshu] migrate v2: embedding JSON→BLOB 转换 ${converted} 个，跳过 ${skipped} 个`)
+}
+
+/**
+ * v2→v3：新增召回反馈表 recall_feedback。
+ * 记录 Agent 对某条召回结果的反馈（hit=帮上忙 / miss=没用），按 note_id 聚合可指导：
+ * - 长期调 RRF 权重、识别「召回了但没用」与「该召回没召回」的笔记；
+ * - 提示某笔记 N 次 miss 建议合并/改写。
+ */
+function migrateV3(db: Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS recall_feedback (
+      id        INTEGER PRIMARY KEY AUTOINCREMENT,
+      note_id   TEXT NOT NULL,
+      query     TEXT NOT NULL,
+      verdict   TEXT NOT NULL CHECK (verdict IN ('hit', 'miss')),
+      actor     TEXT NOT NULL,
+      ts        TEXT NOT NULL
+    )
+  `)
+  db.exec('CREATE INDEX IF NOT EXISTS idx_feedback_note ON recall_feedback(note_id)')
 }

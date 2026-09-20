@@ -73,7 +73,9 @@ export class Embedder {
   }
 }
 
-/** 余弦相似度（两向量等长） */
+/** 余弦相似度（两向量等长）。
+ * 注：语义召回主链路已改用 VectorIndex 的内存矩阵（dotProduct/norm），本函数仅供测试与通用工具场景使用。
+ */
 export function cosineSimilarity(a: number[] | null | undefined, b: number[] | null | undefined): number {
   if (!a || !b || a.length !== b.length || a.length === 0) return 0
   let dot = 0, na = 0, nb = 0

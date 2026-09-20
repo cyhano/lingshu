@@ -38,9 +38,8 @@ const ACTOR = process.env.LINGSHU_ACTOR || 'human'
 
 switch (cmd) {
   case 'serve': {
-    const { default: _ } = { default: null }
-    // serve 实际由 server/main.ts 承担，这里只是转发提示
-    console.log('请直接运行: bun run /Users/tal/code/lingshu/src/server/main.ts')
+    // 真正拉起 daemon：动态 import server/main.ts（与 `bun run src/server/main.ts` 等价，但路径不硬编码）
+    await import('../server/main.ts')
     break
   }
 
