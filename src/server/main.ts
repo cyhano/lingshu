@@ -7,6 +7,7 @@ import { Repo } from '../db/repo.ts'
 import { Embedder } from '../embed/embedder.ts'
 import { EmbedPipeline } from '../embed/pipeline.ts'
 import { RecallService } from '../recall/recall.ts'
+import { VectorIndex } from '../recall/vectorIndex.ts'
 import { Scheduler } from '../scheduler/scheduler.ts'
 import { createApp } from './app.ts'
 import { loadConfig } from './config.ts'
@@ -23,8 +24,11 @@ const db = openDb(config.dbPath)
 migrate(db)
 const repo = new Repo(db)
 const embedder = new Embedder({ apiKey: config.siliconflowKey })
-const pipeline = new EmbedPipeline(repo, embedder)
-const recall = new RecallService(repo, embedder)
+
+// 向量矩阵缓存（方案 A）：与 pipeline 共享，写新 embedding 后标脏惰性重建
+const index = new VectorIndex(repo)
+const pipeline = new EmbedPipeline(repo, embedder, () => index.markDirty())
+const recall = new RecallService(repo, embedder, index)
 
 const scheduler = new Scheduler({
   db,

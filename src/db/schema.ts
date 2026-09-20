@@ -6,7 +6,7 @@ import { Database } from 'bun:sqlite'
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 
-export const SCHEMA_VERSION = 1
+export const SCHEMA_VERSION = 2
 
 export function openDb(dbPath: string): Database {
   // 确保父目录存在（首次运行 ~/.lingshu 尚未创建）
@@ -22,6 +22,17 @@ export function migrate(db: Database): void {
   const row = db.query('PRAGMA user_version').get() as { user_version: number }
   if (row.user_version >= SCHEMA_VERSION) return
 
+  // v1：建初始表结构（空库首跑）
+  if (row.user_version < 1) migrateV1(db)
+
+  // v2：embedding 从 JSON 文本迁移为二进制 BLOB（Float32Array.buffer）
+  // 收益：磁盘占用降约 5 倍（21.7KB→4KB/chunk）、召回缓存构建零 JSON.parse
+  if (row.user_version < 2) migrateV2(db)
+
+  db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`)
+}
+
+function migrateV1(db: Database): void {
   db.transaction(() => {
     // ── 事实表：正文永远是原始 markdown ──
     db.exec(`
@@ -84,7 +95,7 @@ export function migrate(db: Database): void {
         seq          INTEGER NOT NULL,
         heading_path TEXT NOT NULL DEFAULT '',
         content      TEXT NOT NULL,
-        embedding    TEXT,            -- JSON number[]，NULL = 待向量化（脏标记）
+        embedding    BLOB,            -- Float32Array.buffer 二进制向量，NULL = 待向量化（脏标记）；v1 时为 JSON 文本，v2 迁移转 BLOB
         content_hash TEXT NOT NULL,
         updated_at   TEXT NOT NULL,
         UNIQUE (note_id, seq)
@@ -120,7 +131,35 @@ export function migrate(db: Database): void {
         VALUES (new.rowid, new.title, new.content_md);
       END
     `)
-
-    db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`)
   })()
+}
+
+/**
+ * v1→v2：embedding 列从 JSON 文本（number[]）迁移为 BLOB（Float32Array.buffer）。
+ * 只改存储编码，不改列名/维度/语义；容错跳过损坏行，损坏的向量保持原样（召回时按脏数据跳过）。
+ */
+function migrateV2(db: Database): void {
+  // 只处理 embedding 非空且仍是 JSON 文本的行（未迁移过的）
+  const rows = db
+    .query(`SELECT id, embedding FROM chunks WHERE embedding IS NOT NULL AND typeof(embedding) = 'text'`)
+    .all() as Array<{ id: number; embedding: string }>
+  if (rows.length === 0) return
+
+  const update = db.query('UPDATE chunks SET embedding = ? WHERE id = ?')
+  let converted = 0
+  let skipped = 0
+  db.transaction(() => {
+    for (const r of rows) {
+      try {
+        const arr = JSON.parse(r.embedding) as number[]
+        if (!Array.isArray(arr) || arr.length === 0) { skipped++; continue }
+        // Float32Array.buffer → Uint8Array（bun:sqlite 以 BLOB 存 Uint8Array）
+        update.run(new Uint8Array(new Float32Array(arr).buffer), r.id)
+        converted++
+      } catch {
+        skipped++ // 损坏 JSON 保留原文（召回层容错跳过）
+      }
+    }
+  })()
+  console.log(`[lingshu] migrate v2: embedding JSON→BLOB 转换 ${converted} 个，跳过 ${skipped} 个`)
 }

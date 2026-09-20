@@ -2,7 +2,8 @@
 // 语义路对「意思相近」敏感，关键词路对「精确词」（项目名、报错码）敏感，融合后两者兼顾
 
 import { Repo, NoteRow } from '../db/repo.ts'
-import { Embedder, cosineSimilarity } from '../embed/embedder.ts'
+import { Embedder } from '../embed/embedder.ts'
+import { VectorIndex } from './vectorIndex.ts'
 
 export interface RecallHit {
   note: NoteRow
@@ -19,6 +20,7 @@ export class RecallService {
   constructor(
     private repo: Repo,
     private embedder: Embedder,
+    private index: VectorIndex,
   ) {}
 
   async recall(query: string, k = 5, vecCandidates = 50, ftsCandidates = 20): Promise<RecallHit[]> {
@@ -66,38 +68,14 @@ export class RecallService {
     return hits
   }
 
-  /** 语义路：query 向量 vs 全部 chunk 向量，取每篇笔记最佳 chunk */
+  /** 语义路：query 向量 vs 内存矩阵（VectorIndex），取每篇笔记最佳 chunk */
   private async vectorRank(query: string, candidates: number) {
     if (!this.embedder.ready) return [] as Array<{ noteId: string; score: number; chunkText: string }>
     const qvec = await this.embedder.embedOne(query)
     if (qvec.length === 0) return [] as Array<{ noteId: string; score: number; chunkText: string }>
 
-    const bestPerNote = new Map<string, { score: number; chunkText: string }>()
-    let corrupted = 0
-    for (const chunk of this.repo.allEmbeddedChunks()) {
-      // 容错：坏 JSON / 维度不匹配（换 embedding 模型混存）的 chunk 跳过而非 500
-      let emb: number[] | null = null
-      try {
-        emb = JSON.parse(chunk.embedding) as number[]
-        if (!Array.isArray(emb)) emb = null
-      } catch {
-        emb = null
-      }
-      if (!emb) { corrupted++; continue }
-      const score = cosineSimilarity(qvec, emb)
-      if (score === 0 && emb.length !== qvec.length) { corrupted++; continue } // 维度混存
-      const best = bestPerNote.get(chunk.note_id)
-      if (!best || score > best.score) {
-        bestPerNote.set(chunk.note_id, { score, chunkText: chunk.content })
-      }
-    }
-    if (corrupted > 0) {
-      console.warn(`[lingshu] 召回跳过 ${corrupted} 个损坏/维度不匹配的向量（建议重新向量化）`)
-    }
-    return [...bestPerNote.entries()]
-      .map(([noteId, v]) => ({ noteId, score: v.score, chunkText: v.chunkText }))
-      .sort((a, b) => b.score - a.score)
-      .slice(0, candidates)
+    // 向量矩阵在内存中（VectorIndex），搜索本身零读盘零反序列化
+    return this.index.search(new Float32Array(qvec), candidates)
   }
 
   /** FTS 兜底摘要：取查询词附近片段 */

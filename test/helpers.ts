@@ -4,6 +4,7 @@
 import { openDb, migrate } from '../src/db/schema.ts'
 import { Repo } from '../src/db/repo.ts'
 import { RecallService } from '../src/recall/recall.ts'
+import { VectorIndex } from '../src/recall/vectorIndex.ts'
 import { EmbedPipeline } from '../src/embed/pipeline.ts'
 import { Embedder } from '../src/embed/embedder.ts'
 import { createApp } from '../src/server/app.ts'
@@ -46,8 +47,9 @@ export function createTestEnv(): TestEnv {
   migrate(db)
   const repo = new Repo(db)
   const embedder = new FakeEmbedder()
-  const pipeline = new EmbedPipeline(repo, embedder)
-  const recall = new RecallService(repo, embedder)
+  const index = new VectorIndex(repo)
+  const pipeline = new EmbedPipeline(repo, embedder, () => index.markDirty())
+  const recall = new RecallService(repo, embedder, index)
   const app = createApp({
     repo,
     recall,

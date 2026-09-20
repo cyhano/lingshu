@@ -407,16 +407,19 @@ export class Repo {
   writeEmbeddings(items: Array<{ id: number; embedding: number[] }>): void {
     const stmt = this.db.query('UPDATE chunks SET embedding = ? WHERE id = ?')
     const tx = this.db.transaction(() => {
-      for (const it of items) stmt.run(JSON.stringify(it.embedding), it.id)
+      for (const it of items) {
+        // embedding 以 BLOB 存 Float32Array.buffer（v2 起；见 schema migrateV2）
+        stmt.run(new Uint8Array(new Float32Array(it.embedding).buffer), it.id)
+      }
     })
     tx()
   }
 
-  /** 全部已向量化的 chunk（暴力召回用） */
-  allEmbeddedChunks(): Array<{ id: number; note_id: string; seq: number; heading_path: string; content: string; embedding: string }> {
+  /** 全部已向量化的 chunk（向量索引加载用）；embedding 为 BLOB（Uint8Array，Float32Array.buffer 的原始字节） */
+  allEmbeddedChunks(): Array<{ id: number; note_id: string; seq: number; heading_path: string; content: string; embedding: Uint8Array }> {
     return this.db
       .query('SELECT id, note_id, seq, heading_path, content, embedding FROM chunks WHERE embedding IS NOT NULL')
-      .all() as Array<{ id: number; note_id: string; seq: number; heading_path: string; content: string; embedding: string }>
+      .all() as Array<{ id: number; note_id: string; seq: number; heading_path: string; content: string; embedding: Uint8Array }>
   }
 
   notesByIds(ids: string[]): NoteRow[] {

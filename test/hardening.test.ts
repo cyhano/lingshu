@@ -66,12 +66,12 @@ describe('embedding_ready 状态上报', () => {
 })
 
 describe('坏向量容错（vectorRank 不 500）', () => {
-  test('损坏的 embedding JSON 被跳过，其余正常召回', async () => {
+  test('损坏的 embedding 字节数非 4 倍数被跳过，其余正常召回', async () => {
     await req(env.app, 'POST', '/notes', { title: '好笔记', content_md: '正常内容独特词琥珀' })
     await env.pipeline.processBatch(64)
 
-    // 手工破坏一个向量
-    ;(env.repo as any).db.query("UPDATE chunks SET embedding = 'NOT-JSON' WHERE embedding IS NOT NULL").run()
+    // 手工破坏一个向量：写入字节数非 4 倍数的 BLOB（模拟损坏数据）
+    ;(env.repo as any).db.query("UPDATE chunks SET embedding = ? WHERE embedding IS NOT NULL").run(new Uint8Array([1, 2, 3, 4, 5, 6]))
 
     // 不应 500；FTS 路仍可命中
     const { status, json } = await req(env.app, 'POST', '/recall', { query: '琥珀', k: 3 })
@@ -83,11 +83,11 @@ describe('坏向量容错（vectorRank 不 500）', () => {
   test('维度混存（模型升级场景）：旧维度向量静默归零不炸', async () => {
     await req(env.app, 'POST', '/notes', { title: '维A', content_md: '维度测试内容一' })
     await env.pipeline.processBatch(64)
-    // 把一个 8 维向量改成 9 维（模拟换模型后的混存）
-    const emb = (env.repo as any).db.query('SELECT id, embedding FROM chunks WHERE embedding IS NOT NULL LIMIT 1').get()
-    const arr = JSON.parse(emb.embedding)
-    arr.push(0.1) // 8 维 → 9 维
-    ;(env.repo as any).db.query('UPDATE chunks SET embedding = ? WHERE id = ?').run(JSON.stringify(arr), emb.id)
+    // 把某个 8 维向量改成 9 维（36 字节，模拟换模型后的混存）
+    const emb = (env.repo as any).db.query('SELECT id, embedding FROM chunks WHERE embedding IS NOT NULL LIMIT 1').get() as { id: number; embedding: Uint8Array }
+    const wrong = new Uint8Array(9 * 4) // 9 维 → 36 字节
+    wrong.set(emb.embedding.subarray(0, 32))
+    ;(env.repo as any).db.query('UPDATE chunks SET embedding = ? WHERE id = ?').run(wrong, emb.id)
 
     const { status } = await req(env.app, 'POST', '/recall', { query: '维度测试', k: 3 })
     expect(status).toBe(200)

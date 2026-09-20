@@ -11,6 +11,8 @@ export class EmbedPipeline {
   constructor(
     private repo: Repo,
     private embedder: Embedder,
+    /** 每轮写成功 embedding 后触发（向量索引标脏重建用） */
+    private onEmbedded?: () => void,
   ) {}
 
   get busy(): boolean {
@@ -29,7 +31,10 @@ export class EmbedPipeline {
       const items = dirty
         .map((c, i) => ({ id: c.id, embedding: vectors[i] ?? [] }))
         .filter((it) => it.embedding.length > 0)
-      if (items.length > 0) this.repo.writeEmbeddings(items)
+      if (items.length > 0) {
+        this.repo.writeEmbeddings(items)
+        this.onEmbedded?.()
+      }
       return items.length
     } finally {
       this.running = false
