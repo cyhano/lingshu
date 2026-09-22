@@ -49,6 +49,15 @@ describe('append', () => {
     expect(md.indexOf('坑三：新坑')).toBeLessThan(md.indexOf('## 优化点'))
   })
 
+  test('带 anchor 追加：追加内容与下一标题之间有换行分隔，不粘行', async () => {
+    const id = await createSample()
+    const r = await req(env.app, 'PATCH', `/notes/${id}`, { op: 'append', content_md: '坑三：无换行结尾的内容', anchor: '## 已知坑' })
+    expect(r.status).toBe(200)
+    const md = r.json.content_md
+    // 修复前：会粘成「坑三：无换行结尾的内容## 优化点」导致标题行失效
+    expect(md).toContain('坑三：无换行结尾的内容\n\n## 优化点')
+  })
+
   test('frontmatter 保留，正文追加', async () => {
     const { json } = await req(env.app, 'POST', '/notes', {
       title: '带fm',
@@ -116,6 +125,21 @@ describe('锚点与冲突', () => {
     expect(r.status).toBe(404)
   })
 
+  test('锚点误带多个标题（换行拼接）→ 取最后一个标题行定位，不再 404', async () => {
+    const id = await createSample()
+    // 复现线上误用：Agent 把「## 已知坑\n\n## 优化点」整串当锚点传
+    const r = await req(env.app, 'PATCH', `/notes/${id}`, {
+      op: 'replace_section', content_md: '全部修好了。', anchor: '## 已知坑\n\n## 优化点',
+    })
+    expect(r.status).toBe(200)
+    const md = r.json.content_md
+    // 命中的是最后一行「## 优化点」
+    expect(md).toContain('全部修好了。')
+    expect(md).not.toContain('可以加缓存')
+    // 前面的「## 已知坑」章节不受影响
+    expect(md).toContain('坑一：a 会被误判')
+  })
+
   test('锚点可省略 # 前缀，取第一个同名标题', async () => {
     const id = await createSample()
     // 用「已知坑」而非「## 已知坑」也能定位
@@ -123,6 +147,20 @@ describe('锚点与冲突', () => {
     expect(r.status).toBe(200)
     expect(r.json.content_md).toContain('替换了。')
     expect(r.json.content_md).not.toContain('坑一')
+  })
+
+  test('锚点匹配多个同名标题 → 409 ambiguous_anchor，正文未被改动', async () => {
+    const dup = `# 笔记\n\n## 已知坑\n\n第一个坑。\n\n## 别的\n\n中间内容。\n\n## 已知坑\n\n第二个坑。`
+    const { json } = await req(env.app, 'POST', '/notes', { title: '同名标题样本', content_md: dup }, 'zcode')
+    const before = (await req(env.app, 'GET', `/notes/${json.id}`)).json.content_md
+    const r = await req(env.app, 'PATCH', `/notes/${json.id}`, { op: 'replace_section', content_md: '替换了。', anchor: '## 已知坑' })
+    expect(r.status).toBe(409)
+    expect(r.json.error).toBe('ambiguous_anchor')
+    expect(r.json.lines).toEqual([3, 11])
+    expect(r.json.message).toContain('2 个同名标题')
+    // 正文原样未动
+    const after = (await req(env.app, 'GET', `/notes/${json.id}`)).json.content_md
+    expect(after).toBe(before)
   })
 
   test('乐观锁：旧 version → 409，正文未被改动', async () => {

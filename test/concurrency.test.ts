@@ -57,6 +57,35 @@ describe('并发写', () => {
     expect(changes.json.length).toBe(8)
   })
 
+  test('并发创建同题笔记（如当天日报）：恰好一个 201 其余 409 duplicate_title', async () => {
+    const results = await Promise.all(
+      Array.from({ length: 5 }, (_, i) =>
+        req(env.app, 'POST', '/notes', { title: '04-日报/日报/2026-09-21.md', content_md: `内容-${i}` }, `d${i}`),
+      ),
+    )
+    const created = results.filter((r) => r.status === 201)
+    const dups = results.filter((r) => r.status === 409)
+    expect(created.length).toBe(1)
+    expect(dups.length).toBe(4)
+    expect(dups.every((r) => r.json.error === 'duplicate_title')).toBe(true)
+    // 409 响应带已有笔记 id，引导合并而非新建
+    expect(dups[0].json.id).toBe(created[0].json.id)
+  })
+
+  test('多会话并发 append（免锁追加，如各自补日报）：全部成功、内容都在', async () => {
+    const { json } = await req(env.app, 'POST', '/notes', { title: '并发追加目标', content_md: '# 日报\n\n开头。' })
+    const results = await Promise.all(
+      Array.from({ length: 8 }, (_, i) =>
+        req(env.app, 'PATCH', `/notes/${json.id}`, { op: 'append', content_md: `- 条目 ${i}（by a${i}）` }, `a${i}`),
+      ),
+    )
+    expect(results.every((r) => r.status === 200)).toBe(true)
+    const final = await req(env.app, 'GET', `/notes/${json.id}`)
+    // 8 条追加一个不丢，版本 +8
+    for (let i = 0; i < 8; i++) expect(final.json.content_md).toContain(`- 条目 ${i}（by a${i}）`)
+    expect(final.json.version).toBe(9)
+  })
+
   test('并发读写在 WAL 下无死锁（50 读 + 10 写混合）', async () => {
     const { json } = await req(env.app, 'POST', '/notes', { title: '混合负载', content_md: '初始' })
     const id = json.id

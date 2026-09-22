@@ -127,7 +127,8 @@ const tools: ToolDef[] = [
     description:
       '增量写笔记：append（末尾追加）、insert_before（在标题前插入）、replace_section（替换某标题整个章节），' +
       '按 markdown 标题锚点定位，无需重发全文，降低长笔记「整体重写」的丢内容风险。' +
-      '**写前必须先 lingshu_read**（与 lingshu_write 共用 read 基线，read 后被他人改过则拒绝）。' +
+      '**带锚点或 insert/replace 必须先 lingshu_read**（共用 read 基线，read 后被他人改过则拒绝）；' +
+      '**无锚点的 append 免基线免锁**——多会话并发追加（如各自补日报）直接成功，无需先 read、不会冲突。' +
       'replace_section 的 content_md 不含标题（标题沿用 anchor 原样）；误带同名标题会自动剥离。' +
       '锚点找不到会报错，可回退用 lingshu_write 全文写。',
     inputSchema: {
@@ -142,26 +143,38 @@ const tools: ToolDef[] = [
       required: ['id', 'op', 'content_md'],
     },
     handler: async (a) => {
-      // 复用 read-before-write 基线：必须先 read，且 read 后版本未被他人改动
-      const baseline = readBaseline.get(a.id)
-      if (!baseline) {
-        return { error: 'read_before_write', message: `笔记 ${a.id} 在本会话未 read 过，先调 lingshu_read 再 patch` }
-      }
-      const current = await api('GET', `/notes/${encodeURIComponent(a.id)}`).catch(() => null)
-      if (!current) return { error: 'not_found', message: `笔记 ${a.id} 不存在（可能已被删除）` }
-      if (current.version !== baseline.version) {
-        return {
-          error: 'stale_read',
-          message: `笔记 ${a.id} 在 read 之后被 ${current.updated_by} 改过（read 时 v${baseline.version}，当前 v${current.version}）。请重新 lingshu_read 后重试`,
+      // 无锚点 append 是可交换的只增操作（往末尾追加，不覆盖既有内容），
+      // 且 daemon 单线程同步 SQLite 天然串行化——多会话并发追加（如各自补日报）
+      // 直接放行，免 read 基线免乐观锁，避免「409 → Agent 不重试 → 条目丢失」。
+      // 其余操作（带锚点 append / insert_before / replace_section）会改动文中的内容，
+      // 仍走 read-before-write + 乐观锁。
+      if (a.op !== 'append' || a.anchor) {
+        const baseline = readBaseline.get(a.id)
+        if (!baseline) {
+          return { error: 'read_before_write', message: `笔记 ${a.id} 在本会话未 read 过，先调 lingshu_read 再 patch` }
         }
+        const current = await api('GET', `/notes/${encodeURIComponent(a.id)}`).catch(() => null)
+        if (!current) return { error: 'not_found', message: `笔记 ${a.id} 不存在（可能已被删除）` }
+        if (current.version !== baseline.version) {
+          return {
+            error: 'stale_read',
+            message: `笔记 ${a.id} 在 read 之后被 ${current.updated_by} 改过（read 时 v${baseline.version}，当前 v${current.version}）。请重新 lingshu_read 后重试`,
+          }
+        }
+        const result = await api('PATCH', `/notes/${encodeURIComponent(current.id)}`, {
+          op: a.op,
+          content_md: a.content_md,
+          anchor: a.anchor,
+          version: a.version ?? baseline.version,
+        })
+        if (result?.id) recordBaseline(result)
+        return result
       }
-      const result = await api('PATCH', `/notes/${encodeURIComponent(current.id)}`, {
-        op: a.op,
+      // 免锁路径：直接 PATCH，不带 version（LWW 追加，daemon 串行化保证不丢）
+      const result = await api('PATCH', `/notes/${encodeURIComponent(a.id)}`, {
+        op: 'append',
         content_md: a.content_md,
-        anchor: a.anchor,
-        version: a.version ?? baseline.version,
       })
-      if (result?.id) recordBaseline(result)
       return result
     },
   },

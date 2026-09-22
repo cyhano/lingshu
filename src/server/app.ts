@@ -3,7 +3,7 @@
 
 import { Hono } from 'hono'
 import { serveStatic } from 'hono/bun'
-import { Repo, ConflictError, NotFoundError } from '../db/repo.ts'
+import { Repo, ConflictError, NotFoundError, AmbiguousAnchorError } from '../db/repo.ts'
 import { RecallService } from '../recall/recall.ts'
 import { EmbedPipeline } from '../embed/pipeline.ts'
 import { Embedder } from '../embed/embedder.ts'
@@ -34,6 +34,8 @@ export function createApp(deps: AppDeps): Hono {
   app.onError((err, c) => {
     if (err instanceof ConflictError) return c.json({ error: 'conflict', expected: err.expectedVersion, actual: err.actualVersion }, 409)
     if (err instanceof NotFoundError) return c.json({ error: 'not_found', id: err.message }, 404)
+    // 锚点二义：多个同名标题，无法唯一定位（409 让 Agent 收到明确可行动的失败，而非改错位置）
+    if (err instanceof AmbiguousAnchorError) return c.json({ error: 'ambiguous_anchor', lines: err.lines, message: err.message }, 409)
     // JSON 解析失败 → 400（非法 body 不该算服务端错误）
     if (err instanceof SyntaxError) return c.json({ error: 'bad_request', message: '请求体不是合法 JSON' }, 400)
     console.error('[lingshu] 未处理错误:', err)
@@ -50,6 +52,15 @@ export function createApp(deps: AppDeps): Hono {
     const body = await c.req.json<{ title: string; content_md: string; tags?: string[] }>()
     if (!body.title || typeof body.content_md !== 'string') {
       return c.json({ error: 'bad_request', message: 'title 和 content_md 必填' }, 400)
+    }
+    // 原子同题查重（2026-09-21）：多会话并发创建同题笔记（如当天日报）时，
+    // MCP 层的查重有跨进程竞态窗口；daemon 单线程同步 SQLite，此处检查天然原子。
+    const dup = repo.findByTitle(body.title)
+    if (dup) {
+      return c.json(
+        { error: 'duplicate_title', id: dup.id, title: dup.title, version: dup.version, message: `已存在同题笔记「${dup.title}」（id: ${dup.id}）。不要新建，先读取该笔记后把内容合并进去` },
+        409,
+      )
     }
     const note = repo.create({ title: body.title, content_md: body.content_md, tags: body.tags, actor: actorOf(c) })
     return c.json(note, 201)

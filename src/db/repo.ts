@@ -41,6 +41,13 @@ export class NotFoundError extends Error {
   }
 }
 
+/** 锚点匹配到多个同名标题，无法唯一定位（拒绝静默取第一个，防改错位置） */
+export class AmbiguousAnchorError extends Error {
+  constructor(message: string, public lines: number[]) {
+    super(message)
+  }
+}
+
 export function sha256(text: string): string {
   return createHash('sha256').update(text).digest('hex')
 }
@@ -132,6 +139,13 @@ export class Repo {
     if (!row) return null
     if (row.deleted_at && !includeDeleted) return null
     return row
+  }
+
+  /** 按标题精确查未软删笔记（同题查重用；多个同名取最新） */
+  findByTitle(title: string): NoteRow | null {
+    return this.db
+      .query('SELECT * FROM notes WHERE deleted_at IS NULL AND title = ? ORDER BY updated_at DESC LIMIT 1')
+      .get(title) as NoteRow | null
   }
 
   /** 按 id 或 title 模糊查找（MCP/CLI 便利接口）；LIKE 转义防 %/_ 通配符误命中 */
@@ -514,31 +528,37 @@ export class Repo {
    *  - startLine 指向标题行本身；endLine 指向下一个同级或更高级标题行（不含），无则到文末。
    *  - title 返回匹配到的原始标题行（含 # 前缀，供 replace_section 沿用原标题）；
    *    level 取匹配行真实的标题层级（而非 anchor 参数里的 # 个数，anchor 省略 # 前缀也正确）。
+   *  - 多个同名标题匹配时抛 AmbiguousAnchorError（2026-09-21 起），拒绝静默取第一个防改错位置。
    */
   private findSectionRange(bodyLines: string[], anchor: string): { start: number; end: number; title: string; level: number } | null {
-    const target = anchor.trim().replace(/^#+\s*/, '')
+    // 防御：调用方（Agent）可能把多个标题连在一起当锚点传（如「## 踩坑\n\n## 具体条目」）。
+    // 取最后一个非空行作为有效锚点标题——前面的行当作「路径上下文」忽略掉，避免整串匹配不上而 404。
+    const lastLine = anchor.split('\n').map(l => l.trim()).filter(Boolean).pop() ?? ''
+    const target = lastLine.replace(/^#+\s*/, '')
     if (!target) return null
-    let start = -1
-    let end = bodyLines.length
-    let title = ''
-    let level = 1
+
+    // 第一遍：全量扫描所有同名标题行（1-based 行号），二义性判断需覆盖整个正文，
+    // 不能只扫到第一个 section 边界就停（否则漏掉后面的同名标题）。
+    const matchLines: number[] = []
     for (let i = 0; i < bodyLines.length; i++) {
-      const line = bodyLines[i]
-      const m = line.match(/^(#{1,6})\s+(.*)$/)
-      if (!m) continue
-      const lv = m[1].length
-      const text = m[2].trim()
-      if (start < 0 && text === target) {
-        start = i
-        title = line
-        level = lv
-      } else if (start >= 0 && lv <= level) {
-        // 下一个同级或更高级标题 = section 结束边界
-        end = i
-        break
-      }
+      const m = bodyLines[i].match(/^(#{1,6})\s+(.*)$/)
+      if (m && m[2].trim() === target) matchLines.push(i + 1)
     }
-    return start < 0 ? null : { start, end, title, level }
+    if (matchLines.length === 0) return null
+    if (matchLines.length > 1) {
+      throw new AmbiguousAnchorError(`锚点标题「${lastLine}」匹配到 ${matchLines.length} 个同名标题（第 ${matchLines.join('、')} 行）。无法确定目标章节，请改用更精确的锚点或 lingshu_write 全文写`, matchLines)
+    }
+
+    // 第二遍：定位唯一匹配的 section 区间
+    const start = matchLines[0] - 1
+    const title = bodyLines[start]
+    const level = (title.match(/^(#{1,6})/)!)[1].length
+    let end = bodyLines.length
+    for (let i = start + 1; i < bodyLines.length; i++) {
+      const m = bodyLines[i].match(/^(#{1,6})\s+(.*)$/)
+      if (m && m[1].length <= level) { end = i; break }
+    }
+    return { start, end, title, level }
   }
 
   /** 剥掉 content 开头与 anchor 同名的标题行（含 # 前缀）及紧随的空行。
@@ -568,7 +588,8 @@ export class Repo {
     id: string,
     input: { op: 'append' | 'insert_before' | 'replace_section'; content_md: string; anchor?: string; actor: Actor; expectedVersion?: number },
   ): NoteRow {
-    const old = this.get(id)
+    // 支持按 id 或标题定位（与 GET /notes/:id 的语义一致，MCP 免锁 append 常传标题）
+    const old = this.get(id) ?? this.resolve(id)
     if (!old) throw new NotFoundError(id)
     const { body, frontmatter } = splitFrontmatter(old.content_md)
     // splitFrontmatter 只在 frontmatter 结尾吃掉一个 \n，body 可能以空行（\n）开头；
@@ -596,7 +617,11 @@ export class Repo {
         const range = this.findSectionRange(bodyLines, input.anchor)
         if (!range) throw new NotFoundError(`锚点标题「${input.anchor}」不存在`)
         const secEnd = linesToOffset(range.end)
-        content = bodyText.slice(0, secEnd).replace(/\s+$/, '') + '\n\n' + input.content_md + bodyText.slice(secEnd)
+        const tail = bodyText.slice(secEnd)
+        // tail 以「下一个标题行」开头：必须在追加内容与 tail 之间补空行，
+        // 否则追加内容不换行时会与下一标题粘成一行（标题行失效，见 2026-09-21 线上案例）
+        content = bodyText.slice(0, secEnd).replace(/\s+$/, '') + '\n\n' + input.content_md
+          + (tail && !tail.startsWith('\n') ? '\n\n' + tail : tail)
       }
     } else if (input.op === 'insert_before') {
       const range = this.findSectionRange(bodyLines, input.anchor!)
@@ -622,6 +647,7 @@ export class Repo {
     const full = frontmatter && Object.keys(frontmatter).length > 0
       ? old.content_md.slice(0, headEnd) + content
       : content
-    return this.update(id, { content_md: full, actor: input.actor, expectedVersion: input.expectedVersion })
+    // 用 old.id 而非入参 id（入参可能是标题）
+    return this.update(old.id, { content_md: full, actor: input.actor, expectedVersion: input.expectedVersion })
   }
 }
