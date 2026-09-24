@@ -97,7 +97,7 @@ export class RecallService {
 
   /** FTS 兜底摘要：取查询词附近片段 */
   private makeSnippet(content: string, query: string, len = 120): string {
-    const { body } = { body: content.replace(/^---\n[\s\S]*?\n---\n?/, '') }
+    const body = content.replace(/^---\n[\s\S]*?\n---\n?/, '')
     const idx = body.toLowerCase().indexOf(query.toLowerCase())
     if (idx < 0) return body.slice(0, len).replace(/\n+/g, ' ')
     const start = Math.max(0, idx - 40)

@@ -108,16 +108,22 @@ const tools: ToolDef[] = [
         if (result?.id) recordBaseline(result) // 写成功后刷新基线
         return result
       }
-      // ── 创建路径：同题查重，防重复建篇 ──
+      // ── 创建路径：直接 POST，由 daemon 做精确原子查重（409 duplicate_title）──
+      // （旧版在 MCP 层用 GET /notes/:title 预查重，但 resolve 是 LIKE 模糊匹配，
+      //  标题「包含查询词」的笔记会被误判为重复；daemon 的 POST 查重是精确且原子的，以此为准）
       const title = a.title || '未命名'
-      const dup = await api('GET', `/notes/${encodeURIComponent(title)}`).catch(() => null)
-      if (dup?.id) {
-        return {
-          error: 'duplicate_title',
-          message: `已存在同题笔记「${dup.title}」（id: ${dup.id}，v${dup.version}，${dup.updated_at} 更新）。不要新建，先 lingshu_read 该笔记，然后把内容合并进去更新`,
+      let created: any
+      try {
+        created = await api('POST', '/notes', { title, content_md: a.content_md, tags: a.tags })
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 409 && e.body?.error === 'duplicate_title') {
+          return {
+            error: 'duplicate_title',
+            message: `已存在同题笔记「${e.body.title}」（id: ${e.body.id}，v${e.body.version}，${e.body.message ?? ''}）。不要新建，先 lingshu_read 该笔记，然后把内容合并进去更新`,
+          }
         }
+        throw e
       }
-      const created = await api('POST', '/notes', { title, content_md: a.content_md, tags: a.tags })
       if (created?.id) recordBaseline(created)
       return created
     },

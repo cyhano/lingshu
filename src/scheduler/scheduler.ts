@@ -6,7 +6,7 @@
 import { Database } from 'bun:sqlite'
 import { readdirSync, unlinkSync, existsSync, mkdirSync } from 'node:fs'
 import path from 'node:path'
-import { isBackupTime } from '../server/config.ts'
+import { isBackupTime, localDate } from '../server/config.ts'
 
 export interface SchedulerDeps {
   db: Database
@@ -45,7 +45,7 @@ export class Scheduler {
     this.timers.push(
       setInterval(() => {
         if (isBackupTime(this.deps.backupTime, this.lastBackupDate)) {
-          this.lastBackupDate = new Date().toISOString().slice(0, 10)
+          this.lastBackupDate = localDate(new Date()) // 本地日期，与 isBackupTime 同口径
           try {
             this.backup()
           } catch (e) {

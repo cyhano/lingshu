@@ -20,3 +20,7 @@ backups/
 *.swp
 .idea/
 .vscode/
+
+# 工具副产物
+*.profraw
+*.log

@@ -82,11 +82,20 @@ export function loadConfig(): LingshuConfig {
   }
 }
 
+/** 本地时区日期（YYYY-MM-DD）。备份防重复用，与 backupTime 的小时/分钟保持同一口径
+ *  （旧实现用 toISOString 的 UTC 日期：UTC+8 下 03:00 触发时 UTC 日期还是前一天，口径混用是隐患）。 */
+export function localDate(now = new Date()): string {
+  const y = now.getFullYear()
+  const m = String(now.getMonth() + 1).padStart(2, '0')
+  const d = String(now.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
+
 /** 供 scheduler 判断是否到了每日备份时间 */
 export function isBackupTime(backupTime: string, lastBackupDate: string, now = new Date()): boolean {
   const t = parseTimeOfDay(backupTime)
   if (!t) return false
-  const today = now.toISOString().slice(0, 10)
+  const today = localDate(now)
   if (lastBackupDate === today) return false
   return now.getHours() === t.hour && now.getMinutes() === t.minute
 }

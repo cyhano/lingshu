@@ -295,15 +295,16 @@ export class Repo {
     return this.get(id)!
   }
 
-  /** 软删（可恢复）；硬删用 purge */
+  /** 软删（可恢复）；硬删用 purge。id 参数兼容内部 id 或标题（经 resolve 解析） */
   delete(id: string, actor: Actor): void {
-    const row = this.get(id)
+    const row = this.get(id) ?? this.resolve(id)
     if (!row) throw new NotFoundError(id)
+    const noteId = row.id // resolve 可能按标题命中，后续 SQL 一律用内部 id
     this.db.transaction(() => {
       this.db.query('UPDATE notes SET deleted_at = ?, updated_by = ?, updated_at = ? WHERE id = ?')
-        .run(now(), actor, now(), id)
+        .run(now(), actor, now(), noteId)
       this.db.query('INSERT INTO changes (note_id, op, actor, title, ts) VALUES (?, ?, ?, ?, ?)')
-        .run(id, 'delete', actor, row.title, now())
+        .run(noteId, 'delete', actor, row.title, now())
     })()
   }
 
